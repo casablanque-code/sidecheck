@@ -6,6 +6,11 @@
 //! значительно меньше шума, чем среднее или даже минимум по сырым данным.
 //! На этом строится "box test" — сравнение низких перцентилей двух выборок.
 
+/// Число итераций bootstrap resampling для доверительного интервала.
+/// Вынесено в константу, чтобы её можно было честно указать в отчёте —
+/// не просто "confidence: 95%", а явно "bootstrap confidence на N итерациях".
+pub const BOOTSTRAP_ITERATIONS: usize = 2000;
+
 use rand::Rng;
 
 /// Возвращает значение p-го перцентиля отсортированной выборки (p в [0.0, 100.0]).
@@ -54,7 +59,7 @@ pub fn box_test(class_a: &[f64], class_b: &[f64], low_percentile: f64, confidenc
     let b_p = percentile(&b_sorted, low_percentile);
     let leak = b_p - a_p;
 
-    let (ci_low, ci_high) = bootstrap_ci(class_a, class_b, low_percentile, confidence, 2000);
+    let (ci_low, ci_high) = bootstrap_ci(class_a, class_b, low_percentile, confidence, BOOTSTRAP_ITERATIONS);
 
     BoxTestResult {
         class_a_low_percentile: a_p,

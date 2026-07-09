@@ -88,12 +88,9 @@ impl HttpTarget {
 /// Генерирует заведомо неверное значение той же длины, что и реальный
 /// секрет — чтобы длина payload не была отдельной переменной, искажающей
 /// измерение (см. предупреждение в CLI про разную длину value_a/value_b).
-/// Не совпадает с секретом почти наверняка при length > 0 (случайный
-/// алфавитно-цифровой набор), но на всякий случай перегенерируется, если
-/// вдруг совпало.
-pub fn random_wrong_value(secret: &str) -> String {
+/// Принимает внешний RNG, чтобы весь прогон был воспроизводим по одному seed.
+pub fn random_wrong_value(secret: &str, rng: &mut impl Rng) -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let mut rng = rand::thread_rng();
     loop {
         let candidate: String = (0..secret.len())
             .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
@@ -125,11 +122,11 @@ pub fn run_interleaved(
     value_b: &str,
     n_per_class: usize,
     block_size: usize,
+    rng: &mut impl Rng,
     mut on_progress: impl FnMut(usize, usize),
 ) -> Result<RawSamples> {
     const MAX_FAILURE_RATIO: f64 = 0.1;
 
-    let mut rng = rand::thread_rng();
     let mut result = RawSamples::default();
     let mut remaining_a = n_per_class;
     let mut remaining_b = n_per_class;
@@ -140,7 +137,7 @@ pub fn run_interleaved(
         let mut block: Vec<bool> = Vec::new(); // true = class A
         block.extend(std::iter::repeat(true).take(block_size.min(remaining_a)));
         block.extend(std::iter::repeat(false).take(block_size.min(remaining_b)));
-        block.shuffle(&mut rng);
+        block.shuffle(rng);
 
         for is_a in block {
             let measurement = if is_a {

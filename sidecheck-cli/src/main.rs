@@ -1,7 +1,9 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{ArgGroup, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use sidecheck_core::{export, report::DetectionReport, sampler::{self, InjectionPoint}, stats};
+use std::io::BufRead;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -17,7 +19,7 @@ enum Commands {
     #[command(group(
         ArgGroup::new("secret_mode")
             .required(true)
-            .args(["secret", "value_b"])
+            .args(["secret", "secret_env", "secret_stdin", "value_b"])
     ))]
     #[command(group(
         ArgGroup::new("injection")
@@ -38,10 +40,20 @@ enum Commands {
         #[arg(long, value_name = "NAME")]
         json_field: Option<String>,
 
-        /// Простой режим: твой настоящий секрет. Неверное значение той же
-        /// длины сгенерируется автоматически.
+        /// Простой режим: твой настоящий секрет прямо аргументом. Виден в
+        /// `ps aux` и попадёт в историю шелла — для чувствительных секретов
+        /// используй --secret-env или --secret-stdin.
         #[arg(long)]
         secret: Option<String>,
+        /// Читать секрет из переменной окружения с этим именем (не светится
+        /// в `ps aux`/истории шелла) — предпочтительный способ
+        #[arg(long, value_name = "VAR")]
+        secret_env: Option<String>,
+        /// Прочитать секрет из stdin (одна строка, без переноса) —
+        /// удобно для пайпа из password-менеджера: `pass show x | sidecheck ... --secret-stdin`
+        #[arg(long, default_value_t = false)]
+        secret_stdin: bool,
+
         /// Продвинутый режим: заведомо неверное значение (класс A)
         #[arg(long, requires = "value_b")]
         value_a: Option<String>,
@@ -75,6 +87,14 @@ enum Commands {
         /// независимой перепроверки статистики
         #[arg(long, value_name = "PATH")]
         output_csv: Option<PathBuf>,
+        /// Сохранить машиночитаемый JSON-отчёт (для CI/автоматизации)
+        #[arg(long, value_name = "PATH")]
+        report: Option<PathBuf>,
+        /// Seed для генератора случайных чисел — фиксирует порядок
+        /// чередования запросов, чтобы прогон можно было точно повторить.
+        /// Если не указан, генерируется случайно и печатается в отчёте.
+        #[arg(long)]
+        seed: Option<u64>,
     },
 }
 
@@ -83,14 +103,41 @@ enum Commands {
 /// эффекта такого размера хватило бы меньшего числа.
 const MIN_SAMPLES: usize = 200;
 
+fn read_secret(
+    secret: Option<String>,
+    secret_env: Option<String>,
+    secret_stdin: bool,
+) -> Result<Option<String>> {
+    if let Some(s) = secret {
+        eprintln!(
+            "warning: secret passed via --secret is visible in `ps aux` and shell history. \
+             Prefer --secret-env or --secret-stdin for anything sensitive."
+        );
+        return Ok(Some(s));
+    }
+    if let Some(var) = secret_env {
+        let value = std::env::var(&var)
+            .with_context(|| format!("environment variable {var} is not set"))?;
+        return Ok(Some(value));
+    }
+    if secret_stdin {
+        let stdin = std::io::stdin();
+        let mut line = String::new();
+        stdin.lock().read_line(&mut line).context("failed to read secret from stdin")?;
+        return Ok(Some(line.trim_end_matches(['\n', '\r']).to_string()));
+    }
+    Ok(None)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Check {
-            url, header, query, json_field, secret, value_a, value_b,
+            url, header, query, json_field,
+            secret, secret_env, secret_stdin, value_a, value_b,
             samples, max_samples, pilot_samples, block_size, confidence, percentile, insecure,
-            output_csv,
+            output_csv, report, seed,
         } => {
             let injection = if let Some(name) = header {
                 InjectionPoint::Header(name)
@@ -102,17 +149,24 @@ fn main() -> Result<()> {
                 unreachable!("clap ArgGroup guarantees exactly one injection point")
             };
 
-            let (val_a, val_b) = if let Some(secret) = secret {
-                let wrong = sampler::random_wrong_value(&secret);
+            // seed фиксируем до первого использования RNG, чтобы весь прогон
+            // (генерация неверного значения + порядок чередования запросов)
+            // был воспроизводим по одному числу, которое печатается в отчёте.
+            let seed = seed.unwrap_or_else(|| rand::thread_rng().gen());
+            let mut rng = StdRng::seed_from_u64(seed);
+
+            let resolved_secret = read_secret(secret, secret_env, secret_stdin)?;
+            let (val_a, val_b) = if let Some(secret) = resolved_secret {
+                let wrong = sampler::random_wrong_value(&secret, &mut rng);
                 eprintln!("generated wrong value of matching length: {} bytes", wrong.len());
                 (wrong, secret)
             } else {
-                let b = value_b.expect("clap group guarantees value_b when secret is absent");
+                let b = value_b.expect("clap group guarantees value_b when no secret source given");
                 let a = match value_a {
                     Some(a) => a,
                     None => {
                         eprintln!("--value-b given without --value-a, generating a random wrong value");
-                        sampler::random_wrong_value(&b)
+                        sampler::random_wrong_value(&b, &mut rng)
                     }
                 };
                 (a, b)
@@ -127,14 +181,15 @@ fn main() -> Result<()> {
                     val_b.len()
                 );
             }
-            eprintln!("sidecheck: only test systems you own or have explicit permission to test.\n");
+            eprintln!("sidecheck: only test systems you own or have explicit permission to test.");
+            eprintln!("seed: {seed} (pass --seed {seed} to reproduce this exact request order)\n");
             let injection_desc = injection.describe();
             eprintln!("injection point: {}\n", injection_desc);
 
             let target = sampler::HttpTarget::new_with_options(&url, injection, insecure)?;
 
             eprintln!("running pilot batch ({pilot_samples} samples/class) to estimate network jitter...");
-            let pilot = sampler::run_interleaved(&target, &val_a, &val_b, pilot_samples, block_size, |_, _| {})?;
+            let pilot = sampler::run_interleaved(&target, &val_a, &val_b, pilot_samples, block_size, &mut rng, |_, _| {})?;
             let mut combined_pilot = pilot.class_a.clone();
             combined_pilot.extend(&pilot.class_b);
             let jitter = stats::estimate_jitter(&combined_pilot, percentile);
@@ -186,7 +241,7 @@ fn main() -> Result<()> {
 
             let pb = ProgressBar::new((effective_samples * 2) as u64);
             pb.set_style(ProgressStyle::with_template("{bar:40} {pos}/{len} requests").unwrap());
-            let raw = sampler::run_interleaved(&target, &val_a, &val_b, effective_samples, block_size, |done, total| {
+            let raw = sampler::run_interleaved(&target, &val_a, &val_b, effective_samples, block_size, &mut rng, |done, total| {
                 pb.set_position(done as u64);
                 pb.set_length(total as u64);
             })?;
@@ -198,15 +253,22 @@ fn main() -> Result<()> {
             }
 
             let result = stats::box_test(&raw.class_a, &raw.class_b, percentile, confidence);
-            let report = DetectionReport {
+            let detection_report = DetectionReport {
                 target: url,
                 field: injection_desc,
                 samples_per_class: effective_samples,
                 result,
                 jitter_seconds: jitter,
                 failures: raw.failures,
+                seed,
+                sidecheck_version: env!("CARGO_PKG_VERSION").to_string(),
             };
-            println!("{}", report.render());
+            println!("{}", detection_report.render());
+
+            if let Some(path) = &report {
+                export::write_json(path, &detection_report)?;
+                eprintln!("JSON report written to {}", path.display());
+            }
 
             Ok(())
         }
