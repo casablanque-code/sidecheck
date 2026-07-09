@@ -1,0 +1,19 @@
+[package]
+name = "sidecheck"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "sidecheck"
+path = "src/main.rs"
+
+[dependencies]
+sidecheck-core = { path = "../sidecheck-core", version = "0.1.0" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+indicatif = "0.17"
