@@ -57,7 +57,11 @@ impl HttpTarget {
             .danger_accept_invalid_certs(accept_invalid_certs)
             .build()
             .context("failed to build HTTP client")?;
-        Ok(Self { client, url: url.into(), injection })
+        Ok(Self {
+            client,
+            url: url.into(),
+            injection,
+        })
     }
 
     /// Один замер: отправляет запрос с заданным значением в настроенной
@@ -66,12 +70,16 @@ impl HttpTarget {
         let start = Instant::now();
 
         let resp = match &self.injection {
-            InjectionPoint::Header(name) => {
-                self.client.get(&self.url).header(name.as_str(), value).send()
-            }
-            InjectionPoint::Query(name) => {
-                self.client.get(&self.url).query(&[(name.as_str(), value)]).send()
-            }
+            InjectionPoint::Header(name) => self
+                .client
+                .get(&self.url)
+                .header(name.as_str(), value)
+                .send(),
+            InjectionPoint::Query(name) => self
+                .client
+                .get(&self.url)
+                .query(&[(name.as_str(), value)])
+                .send(),
             InjectionPoint::JsonBody(field) => {
                 let body = serde_json::json!({ field: value });
                 self.client.post(&self.url).json(&body).send()

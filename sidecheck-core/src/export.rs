@@ -72,9 +72,8 @@ impl JsonReport {
 
 pub fn write_json(path: &Path, report: &DetectionReport) -> Result<()> {
     let json_report = JsonReport::from_detection(report);
-    let text = serde_json::to_string_pretty(&json_report)
-        .context("failed to serialize report to JSON")?;
-    std::fs::write(path, text)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    let text =
+        serde_json::to_string_pretty(&json_report).context("failed to serialize report to JSON")?;
+    std::fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }

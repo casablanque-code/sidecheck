@@ -2,12 +2,21 @@ use anyhow::{Context, Result};
 use clap::{ArgGroup, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use sidecheck_core::{export, report::DetectionReport, sampler::{self, InjectionPoint}, stats};
+use sidecheck_core::{
+    export,
+    report::DetectionReport,
+    sampler::{self, InjectionPoint},
+    stats,
+};
 use std::io::BufRead;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "sidecheck", version, about = "Timing side-channel auditor for your own services")]
+#[command(
+    name = "sidecheck",
+    version,
+    about = "Timing side-channel auditor for your own services"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -123,7 +132,10 @@ fn read_secret(
     if secret_stdin {
         let stdin = std::io::stdin();
         let mut line = String::new();
-        stdin.lock().read_line(&mut line).context("failed to read secret from stdin")?;
+        stdin
+            .lock()
+            .read_line(&mut line)
+            .context("failed to read secret from stdin")?;
         return Ok(Some(line.trim_end_matches(['\n', '\r']).to_string()));
     }
     Ok(None)
@@ -134,10 +146,25 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Check {
-            url, header, query, json_field,
-            secret, secret_env, secret_stdin, value_a, value_b,
-            samples, max_samples, pilot_samples, block_size, confidence, percentile, insecure,
-            output_csv, report, seed,
+            url,
+            header,
+            query,
+            json_field,
+            secret,
+            secret_env,
+            secret_stdin,
+            value_a,
+            value_b,
+            samples,
+            max_samples,
+            pilot_samples,
+            block_size,
+            confidence,
+            percentile,
+            insecure,
+            output_csv,
+            report,
+            seed,
         } => {
             let injection = if let Some(name) = header {
                 InjectionPoint::Header(name)
@@ -158,14 +185,19 @@ fn main() -> Result<()> {
             let resolved_secret = read_secret(secret, secret_env, secret_stdin)?;
             let (val_a, val_b) = if let Some(secret) = resolved_secret {
                 let wrong = sampler::random_wrong_value(&secret, &mut rng);
-                eprintln!("generated wrong value of matching length: {} bytes", wrong.len());
+                eprintln!(
+                    "generated wrong value of matching length: {} bytes",
+                    wrong.len()
+                );
                 (wrong, secret)
             } else {
                 let b = value_b.expect("clap group guarantees value_b when no secret source given");
                 let a = match value_a {
                     Some(a) => a,
                     None => {
-                        eprintln!("--value-b given without --value-a, generating a random wrong value");
+                        eprintln!(
+                            "--value-b given without --value-a, generating a random wrong value"
+                        );
                         sampler::random_wrong_value(&b, &mut rng)
                     }
                 };
@@ -188,13 +220,24 @@ fn main() -> Result<()> {
 
             let target = sampler::HttpTarget::new_with_options(&url, injection, insecure)?;
 
-            eprintln!("running pilot batch ({pilot_samples} samples/class) to estimate network jitter...");
-            let pilot = sampler::run_interleaved(&target, &val_a, &val_b, pilot_samples, block_size, &mut rng, |_, _| {})?;
+            eprintln!(
+                "running pilot batch ({pilot_samples} samples/class) to estimate network jitter..."
+            );
+            let pilot = sampler::run_interleaved(
+                &target,
+                &val_a,
+                &val_b,
+                pilot_samples,
+                block_size,
+                &mut rng,
+                |_, _| {},
+            )?;
             let mut combined_pilot = pilot.class_a.clone();
             combined_pilot.extend(&pilot.class_b);
             let jitter = stats::estimate_jitter(&combined_pilot, percentile);
 
-            let pilot_result = stats::box_test(&pilot.class_a, &pilot.class_b, percentile, confidence);
+            let pilot_result =
+                stats::box_test(&pilot.class_a, &pilot.class_b, percentile, confidence);
             let pilot_leak = pilot_result.estimated_leak.abs();
 
             // Считаем итоговый размер выборки одним проходом и печатаем одно
@@ -219,7 +262,10 @@ fn main() -> Result<()> {
                              clean signal, capping at --max-samples={}. The result may be \
                              inconclusive — consider testing over a lower-latency network \
                              (e.g. same LAN as the target) or raising --max-samples.",
-                            jitter * 1000.0, pilot_leak * 1_000_000.0, needed, max_samples
+                            jitter * 1000.0,
+                            pilot_leak * 1_000_000.0,
+                            needed,
+                            max_samples
                         );
                         max_samples.max(MIN_SAMPLES)
                     } else if (needed as usize) < MIN_SAMPLES {
@@ -241,10 +287,18 @@ fn main() -> Result<()> {
 
             let pb = ProgressBar::new((effective_samples * 2) as u64);
             pb.set_style(ProgressStyle::with_template("{bar:40} {pos}/{len} requests").unwrap());
-            let raw = sampler::run_interleaved(&target, &val_a, &val_b, effective_samples, block_size, &mut rng, |done, total| {
-                pb.set_position(done as u64);
-                pb.set_length(total as u64);
-            })?;
+            let raw = sampler::run_interleaved(
+                &target,
+                &val_a,
+                &val_b,
+                effective_samples,
+                block_size,
+                &mut rng,
+                |done, total| {
+                    pb.set_position(done as u64);
+                    pb.set_length(total as u64);
+                },
+            )?;
             pb.finish_and_clear();
 
             if let Some(path) = &output_csv {

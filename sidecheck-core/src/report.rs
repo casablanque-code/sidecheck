@@ -43,7 +43,10 @@ impl DetectionReport {
         out.push_str(&format!("samples/class    {}\n", self.samples_per_class));
         out.push_str(&format!("network jitter   {jitter}\n"));
         if self.failures > 0 {
-            out.push_str(&format!("failed requests  {} (excluded from analysis)\n", self.failures));
+            out.push_str(&format!(
+                "failed requests  {} (excluded from analysis)\n",
+                self.failures
+            ));
         }
         out.push('\n');
 

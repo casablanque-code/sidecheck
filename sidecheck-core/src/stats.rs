@@ -51,7 +51,12 @@ impl BoxTestResult {
 /// Box test по методологии Crosby-Wallach: сравнивает низкий перцентиль
 /// (по умолчанию p10) двух выборок времени отклика, доверительный интервал
 /// строится через bootstrap resampling.
-pub fn box_test(class_a: &[f64], class_b: &[f64], low_percentile: f64, confidence: f64) -> BoxTestResult {
+pub fn box_test(
+    class_a: &[f64],
+    class_b: &[f64],
+    low_percentile: f64,
+    confidence: f64,
+) -> BoxTestResult {
     let a_sorted = sorted_copy(class_a);
     let b_sorted = sorted_copy(class_b);
 
@@ -59,7 +64,13 @@ pub fn box_test(class_a: &[f64], class_b: &[f64], low_percentile: f64, confidenc
     let b_p = percentile(&b_sorted, low_percentile);
     let leak = b_p - a_p;
 
-    let (ci_low, ci_high) = bootstrap_ci(class_a, class_b, low_percentile, confidence, BOOTSTRAP_ITERATIONS);
+    let (ci_low, ci_high) = bootstrap_ci(
+        class_a,
+        class_b,
+        low_percentile,
+        confidence,
+        BOOTSTRAP_ITERATIONS,
+    );
 
     BoxTestResult {
         class_a_low_percentile: a_p,
@@ -74,7 +85,13 @@ pub fn box_test(class_a: &[f64], class_b: &[f64], low_percentile: f64, confidenc
 /// Bootstrap-доверительный интервал для разницы низких перцентилей.
 /// Не полагается на нормальность — пересэмплирует исходные данные с
 /// возвращением и считает эмпирическое распределение разницы.
-fn bootstrap_ci(class_a: &[f64], class_b: &[f64], p: f64, confidence: f64, iterations: usize) -> (f64, f64) {
+fn bootstrap_ci(
+    class_a: &[f64],
+    class_b: &[f64],
+    p: f64,
+    confidence: f64,
+    iterations: usize,
+) -> (f64, f64) {
     let mut rng = rand::thread_rng();
     let mut diffs = Vec::with_capacity(iterations);
 
@@ -94,7 +111,9 @@ fn bootstrap_ci(class_a: &[f64], class_b: &[f64], p: f64, confidence: f64, itera
 }
 
 fn resample(data: &[f64], rng: &mut impl Rng) -> Vec<f64> {
-    (0..data.len()).map(|_| data[rng.gen_range(0..data.len())]).collect()
+    (0..data.len())
+        .map(|_| data[rng.gen_range(0..data.len())])
+        .collect()
 }
 
 /// Оценка джиттера сети по пилотной выборке — стандартное отклонение
@@ -126,19 +145,32 @@ pub fn required_samples(jitter: f64, expected_leak_seconds: f64, confidence: f64
 fn inverse_normal_cdf(p: f64) -> f64 {
     // Rational approximation, максимальная погрешность ~1.15e-9
     let a = [
-        -3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
-        1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00,
+        -3.969683028665376e+01,
+        2.209460984245205e+02,
+        -2.759285104469687e+02,
+        1.383577518672690e+02,
+        -3.066479806614716e+01,
+        2.506628277459239e+00,
     ];
     let b = [
-        -5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
-        6.680131188771972e+01, -1.328068155288572e+01,
+        -5.447609879822406e+01,
+        1.615858368580409e+02,
+        -1.556989798598866e+02,
+        6.680131188771972e+01,
+        -1.328068155288572e+01,
     ];
     let c = [
-        -7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
-        -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00,
+        -7.784894002430293e-03,
+        -3.223964580411365e-01,
+        -2.400758277161838e+00,
+        -2.549732539343734e+00,
+        4.374664141464968e+00,
+        2.938163982698783e+00,
     ];
     let d = [
-        7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+        7.784695709041462e-03,
+        3.224671290700398e-01,
+        2.445134137142996e+00,
         3.754408661907416e+00,
     ];
     let p_low = 0.02425;
@@ -174,18 +206,30 @@ mod tests {
 
     #[test]
     fn box_test_detects_no_difference() {
-        let a: Vec<f64> = (0..1000).map(|i| 0.010 + (i as f64 % 7.0) * 0.0001).collect();
+        let a: Vec<f64> = (0..1000)
+            .map(|i| 0.010 + (i as f64 % 7.0) * 0.0001)
+            .collect();
         let b = a.clone();
         let result = box_test(&a, &b, 10.0, 0.95);
-        assert!(!result.is_significant(), "identical samples must not be significant");
+        assert!(
+            !result.is_significant(),
+            "identical samples must not be significant"
+        );
     }
 
     #[test]
     fn box_test_detects_real_difference() {
-        let a: Vec<f64> = (0..2000).map(|i| 0.010 + (i as f64 % 11.0) * 0.0002).collect();
-        let b: Vec<f64> = (0..2000).map(|i| 0.010 + 0.0005 + (i as f64 % 11.0) * 0.0002).collect();
+        let a: Vec<f64> = (0..2000)
+            .map(|i| 0.010 + (i as f64 % 11.0) * 0.0002)
+            .collect();
+        let b: Vec<f64> = (0..2000)
+            .map(|i| 0.010 + 0.0005 + (i as f64 % 11.0) * 0.0002)
+            .collect();
         let result = box_test(&a, &b, 10.0, 0.95);
-        assert!(result.is_significant(), "clear 0.5ms shift must be detected");
+        assert!(
+            result.is_significant(),
+            "clear 0.5ms shift must be detected"
+        );
         assert!(result.estimated_leak > 0.0);
     }
 }
