@@ -143,8 +143,8 @@ pub fn run_interleaved(
 
     while remaining_a > 0 || remaining_b > 0 {
         let mut block: Vec<bool> = Vec::new(); // true = class A
-        block.extend(std::iter::repeat_n(true, block_size.min(remaining_a)));
-        block.extend(std::iter::repeat_n(false, block_size.min(remaining_b)));
+        block.extend(std::iter::repeat(true).take(block_size.min(remaining_a)));
+        block.extend(std::iter::repeat(false).take(block_size.min(remaining_b)));
         block.shuffle(rng);
 
         for is_a in block {

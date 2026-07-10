@@ -104,6 +104,12 @@ enum Commands {
         /// Если не указан, генерируется случайно и печатается в отчёте.
         #[arg(long)]
         seed: Option<u64>,
+        /// Всё равно продолжить, даже если по оценке джиттера собранной
+        /// при --max-samples мощности заведомо не хватит для значимого
+        /// результата (по умолчанию sidecheck в этом случае останавливается,
+        /// чтобы не тратить часы на прогон, который всё равно будет inconclusive)
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
 }
 
@@ -111,6 +117,16 @@ enum Commands {
 /// шаткий, даже если формула по джиттеру говорит, что для обнаружения
 /// эффекта такого размера хватило бы меньшего числа.
 const MIN_SAMPLES: usize = 200;
+
+fn format_wall_time(seconds: f64) -> String {
+    if seconds < 60.0 {
+        format!("{seconds:.0}s")
+    } else if seconds < 3600.0 {
+        format!("{:.0}m", seconds / 60.0)
+    } else {
+        format!("{:.1}h", seconds / 3600.0)
+    }
+}
 
 fn read_secret(
     secret: Option<String>,
@@ -165,6 +181,7 @@ fn main() -> Result<()> {
             output_csv,
             report,
             seed,
+            force,
         } => {
             let injection = if let Some(name) = header {
                 InjectionPoint::Header(name)
@@ -256,18 +273,46 @@ fn main() -> Result<()> {
                 None => {
                     let needed = stats::required_samples(jitter, pilot_leak, confidence);
                     if needed as usize > max_samples {
+                        let mean_request_time =
+                            combined_pilot.iter().sum::<f64>() / combined_pilot.len() as f64;
+                        let capped = max_samples.max(MIN_SAMPLES);
+                        let estimated_wall_seconds = mean_request_time * (capped * 2) as f64;
+
                         eprintln!(
                             "warning: network jitter ({:.2} ms) is large relative to the \
-                             estimated effect ({:.1} μs). {} samples would be needed for a \
-                             clean signal, capping at --max-samples={}. The result may be \
-                             inconclusive — consider testing over a lower-latency network \
-                             (e.g. same LAN as the target) or raising --max-samples.",
+                             estimated effect ({:.1} μs) — signal-to-noise ratio is roughly \
+                             1:{:.0}. {} samples would be needed for a clean signal; \
+                             --max-samples={} would still fall far short and the result would \
+                             almost certainly be inconclusive.",
                             jitter * 1000.0,
                             pilot_leak * 1_000_000.0,
+                            jitter / pilot_leak,
                             needed,
                             max_samples
                         );
-                        max_samples.max(MIN_SAMPLES)
+                        eprintln!(
+                            "  running the capped {capped} samples/class would take roughly \
+                             {} at this network's measured latency, for a result that likely \
+                             won't reach significance either way.",
+                            format_wall_time(estimated_wall_seconds)
+                        );
+
+                        if !force {
+                            eprintln!(
+                                "\nstopping before wasting that time. this usually means the \
+                                 leak (if real) is too small to catch over this network path. \
+                                 Options:\n  \
+                                 - test from a lower-latency vantage point (same LAN/datacenter \
+                                 as the target, or from the server itself against 127.0.0.1)\n  \
+                                 - if you understand the result will likely be inconclusive and \
+                                 want to run it anyway, pass --force\n  \
+                                 - or raise --max-samples if you're willing to wait much longer"
+                            );
+                            std::process::exit(1);
+                        }
+
+                        eprintln!("  --force given, proceeding anyway.");
+                        capped
                     } else if (needed as usize) < MIN_SAMPLES {
                         eprintln!(
                             "pilot suggests a very large, easily detectable effect (~{:.1} μs); \
