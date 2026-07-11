@@ -10,7 +10,19 @@
 const http = require('http');
 const crypto = require('crypto');
 
-const SECRET = 'correct-secret-key-123456';
+// Длина настраивается через SECRET_LEN (по умолчанию 25, как раньше) —
+// нужно, чтобы найти длину секрета, на которой реальная (не искусственная)
+// утечка от === становится достаточно большой, чтобы её было видно через
+// HTTP-измерение, а не только в изоляции внутри процесса.
+function buildSecret(length) {
+  const pattern = 'correct-secret-key-123456';
+  let out = '';
+  for (let i = 0; i < length; i++) out += pattern[i % pattern.length];
+  return out;
+}
+
+const SECRET_LEN = parseInt(process.env.SECRET_LEN, 10) || 25;
+const SECRET = buildSecret(SECRET_LEN);
 
 function vulnerableCompare(candidate) {
   // самое частое, что реально пишут: обычное строковое сравнение.
@@ -48,5 +60,6 @@ server.listen(8002, '127.0.0.1', () => {
   console.log('realistic Node fixture on http://127.0.0.1:8002');
   console.log('  /vulnerable — real === comparison, no artificial delay');
   console.log('  /safe       — crypto.timingSafeEqual');
+  console.log(`  secret length: ${SECRET.length} bytes (set SECRET_LEN to change)`);
   console.log(`  secret: ${JSON.stringify(SECRET)}`);
 });

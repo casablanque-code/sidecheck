@@ -33,17 +33,31 @@ cd node-http && node server.js
 #   /safe       — crypto.timingSafeEqual
 ```
 
-## Expectations
+## Finding the crossover point
 
-A quick informal probe (not the real box test — just alternating requests
-and comparing raw p10) against both, over loopback, found a difference on
-the order of ~10μs — smaller than the request-to-request noise from the
-HTTP stack itself, and not even reliably in the expected direction. That's
-not a failure of the fixtures or of `sidecheck`; it's a preview that a
-realistic same-machine leak may sit right at or below the noise floor of
-an HTTP-level measurement, which is exactly the kind of honest limit
-`sidecheck doctor`/`check` should surface on their own, with proper
-statistics, rather than a hand-wavy "yes/no."
+25 bytes turned out too short to detect over real HTTP — CI narrowed to
+sub-microsecond with 200,000 samples/class and still found nothing
+significant. That's an honest result (see main README's Limitations), not
+a failure: a real `==` leak on a 25-byte string is plausibly tens of
+nanoseconds, swamped by everything above raw CPU cycles once you're
+measuring through a socket.
+
+Both fixtures support `SECRET_LEN` to scale the secret up — a longer
+secret means more comparisons before an early exit, so the leak should
+grow roughly linearly with length. Use this to find where it becomes
+detectable over HTTP:
+
+```sh
+SECRET_LEN=500  go run main.go     # or: SECRET_LEN=500 node server.js
+```
+
+The secret is built deterministically by repeating the base pattern, so
+`--value-b` needs the actual printed secret (it's logged at startup) rather
+than the original 25-byte one. Try a few points (100 / 500 / 2000 / 10000
+bytes) with `doctor` first to check the channel is still `GOOD`, then
+`check`, and see where the CI stops including zero.
+
+## Running the default (25-byte) fixtures
 
 Secret for both: `correct-secret-key-123456`
 

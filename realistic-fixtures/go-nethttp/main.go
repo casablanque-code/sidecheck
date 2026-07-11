@@ -14,9 +14,33 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 )
 
-const secret = "correct-secret-key-123456"
+// Длина секрета настраивается через SECRET_LEN (по умолчанию 25 — как в
+// исходном полигоне). Секрет строится детерминированно из повторяющегося
+// паттерна, чтобы результат был воспроизводим между запусками при одной
+// и той же длине.
+func buildSecret(length int) string {
+	const pattern = "correct-secret-key-123456"
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = pattern[i%len(pattern)]
+	}
+	return string(b)
+}
+
+func secretLength() int {
+	if v := os.Getenv("SECRET_LEN"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 25
+}
+
+var secret = buildSecret(secretLength())
 
 func vulnerableHandler(w http.ResponseWriter, r *http.Request) {
 	candidate := r.Header.Get("X-API-Key")
@@ -51,6 +75,7 @@ func main() {
 	fmt.Println("realistic Go fixture on http://127.0.0.1:8001")
 	fmt.Println("  /vulnerable — real == comparison, no artificial delay")
 	fmt.Println("  /safe       — subtle.ConstantTimeCompare")
+	fmt.Printf("  secret length: %d bytes (set SECRET_LEN to change)\n", len(secret))
 	fmt.Printf("  secret: %q\n", secret)
 	log.Fatal(http.ListenAndServe("127.0.0.1:8001", nil))
 }
