@@ -168,6 +168,30 @@ request interleaving order and the generated wrong value. It's printed in
 the report and the JSON output — pass it back with `--seed` to reproduce
 the exact same request sequence, e.g. when debugging an odd result.
 
+## When sidecheck refuses to run
+
+If the pilot batch estimates the network is too noisy relative to the
+detected effect to reach significance within `--max-samples` (200,000 by
+default), `sidecheck check` stops **before** the main run instead of
+silently spending minutes-to-hours on a result that would almost certainly
+be inconclusive. It explains the signal-to-noise ratio and the estimated
+wall-clock time it would have taken. Options at that point:
+
+- test from a lower-latency vantage point (same LAN/datacenter as the
+  target, or the server itself over `127.0.0.1`) — `sidecheck doctor` will
+  confirm whether that's actually better before you commit to it
+- pass `--force` if you understand the run will likely be inconclusive and
+  want the data anyway
+- raise `--max-samples` if you're willing to wait longer
+
+`--samples` set explicitly bypasses this gate (you've already made the
+call) but still prints the same time/power estimate as a heads-up.
+
+Full flag reference: `sidecheck check --help` / `sidecheck doctor --help`
+— tuning knobs like `--pilot-samples`, `--block-size`, `--confidence`, and
+`--percentile` are documented there rather than duplicated here, since
+duplicating them in prose is exactly how documentation quietly goes stale.
+
 ## Reports for CI / automation
 
 ```sh
@@ -211,13 +235,23 @@ classical hypothesis-testing sense.
 
 ## Status
 
-`v0.1` — detection (`check`) and pre-flight diagnostics (`doctor`), single
-HTTP header/query/JSON field per run. Planned: `--repeat N` (run the whole
-experiment multiple times to check how stable the estimate is), realistic
-(non-amplified) reference targets across FastAPI/Express/Actix/Axum/Go/Spring
-to validate detection at realistic effect sizes — not just the artificially
-amplified fixture included here. Then SSH/TLS key entropy auditing
-(shared-prime-factor detection via batch-GCD across your own fleet).
+`v0.1`, pre-1.0 — expect rough edges. Working and validated end-to-end:
+detection (`check`), pre-flight diagnostics (`doctor`), the amplified
+Python fixture for pipeline validation, and two non-amplified reference
+fixtures (`realistic-fixtures/`, Go and Node) confirming that a real
+(not artificially amplified) `==`/`===` leak on a short secret is often
+*not* reliably detectable over HTTP — the noise floor of a real request,
+even on loopback, can exceed a nanosecond-scale CPU-level leak. That's an
+honest limit of the method, not a bug (see Limitations above).
+
+Not yet done: `--repeat N` (stability check across repeated full runs),
+reference targets for FastAPI/Express/Actix/Axum/Spring (only Go/Node so
+far), a longer-secret sweep to find the HTTP-detectable crossover length,
+CI coverage of the actual detection logic end-to-end (current CI only
+runs fmt/clippy/unit-tests, not a real check-against-a-fixture pass),
+crates.io publishing. Then SSH/TLS key entropy auditing (shared-prime-
+factor detection via batch-GCD across your own fleet) as the next major
+feature, separate from timing analysis.
 
 ## Build
 
