@@ -2,7 +2,7 @@
 //! как тратить время на полноценный тест. Отвечает на вопрос "стоит ли вообще
 //! пробовать измерять timing-утечку по этому пути", а не "есть ли утечка".
 
-use crate::stats::{percentile, required_samples};
+use crate::stats::{estimate_jitter, percentile, required_samples};
 
 /// Условный размер "типичной" реальной утечки от небезопасного сравнения —
 /// не искусственно усиленной, а такой, какая бывает от `==` вместо
@@ -83,16 +83,11 @@ impl DoctorReport {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let median_rtt_seconds = if sorted.is_empty() { 0.0 } else { percentile(&sorted, 50.0) };
 
-        // джиттер меряем так же, как в основном пайплайне (см. stats::estimate_jitter),
-        // чтобы рекомендация была в тех же единицах, что реальный check
-        let jitter_seconds = if sorted.is_empty() {
-            0.0
-        } else {
-            let p10 = percentile(&sorted, 10.0);
-            let variance: f64 =
-                latencies.iter().map(|x| (x - p10).powi(2)).sum::<f64>() / latencies.len() as f64;
-            variance.sqrt()
-        };
+        // используем ту же (теперь робастную к выбросам, MAD-based) оценку
+        // джиттера, что и основной pipeline check — раньше здесь был
+        // отдельный расчёт через дисперсию, который расходился с check
+        // на реальных данных из-за чувствительности к единичным выбросам
+        let jitter_seconds = estimate_jitter(latencies);
 
         let recommended_samples = if jitter_seconds > 0.0 {
             required_samples(jitter_seconds, TYPICAL_LEAK_SECONDS, 0.95)

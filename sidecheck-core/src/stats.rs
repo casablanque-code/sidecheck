@@ -116,13 +116,28 @@ fn resample(data: &[f64], rng: &mut impl Rng) -> Vec<f64> {
         .collect()
 }
 
-/// Оценка джиттера сети по пилотной выборке — стандартное отклонение
-/// низкого перцентиля, используется для оценки необходимого числа сэмплов.
-pub fn estimate_jitter(pilot: &[f64], low_percentile: f64) -> f64 {
+/// Оценка джиттера сети по пилотной выборке. Раньше считалась как
+/// стандартное отклонение вокруг низкого перцентиля — но дисперсия
+/// (квадраты отклонений) крайне чувствительна к единичным выбросам
+/// (первый запрос после установки соединения, GC-пауза, шедулинг ОС):
+/// один медленный запрос из трёхсот мог задрать оценку в разы, из-за чего
+/// два независимых замера одного и того же канала расходились в разы.
+///
+/// MAD (median absolute deviation — медиана абсолютных отклонений от
+/// медианы) почти нечувствительна к единичным выбросам: чтобы сдвинуть
+/// медиану, нужно испортить больше половины выборки, а не один запрос.
+/// Множитель 1.4826 — стандартный коэффициент, делающий MAD согласованной
+/// оценкой стандартного отклонения для нормально распределённых данных.
+pub fn estimate_jitter(pilot: &[f64]) -> f64 {
+    if pilot.is_empty() {
+        return 0.0;
+    }
     let sorted = sorted_copy(pilot);
-    let p = percentile(&sorted, low_percentile);
-    let variance: f64 = pilot.iter().map(|x| (x - p).powi(2)).sum::<f64>() / pilot.len() as f64;
-    variance.sqrt()
+    let median = percentile(&sorted, 50.0);
+    let mut abs_deviations: Vec<f64> = pilot.iter().map(|x| (x - median).abs()).collect();
+    abs_deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mad = percentile(&abs_deviations, 50.0);
+    mad * 1.4826
 }
 
 /// Оценка минимального числа запросов на класс, необходимого для
@@ -202,6 +217,29 @@ mod tests {
         assert_eq!(percentile(&data, 0.0), 1.0);
         assert_eq!(percentile(&data, 100.0), 5.0);
         assert_eq!(percentile(&data, 50.0), 3.0);
+    }
+
+    #[test]
+    fn jitter_estimate_is_robust_to_a_single_outlier() {
+        // Регрессия на реальный найденный баг: два независимых замера одного
+        // и того же стабильного канала (doctor vs check pilot) разошлись в
+        // 5 раз, потому что старая (дисперсионная) оценка джиттера была
+        // непропорционально чувствительна к одному медленному запросу
+        // (например, первому после установки TCP-соединения).
+        let mut stable: Vec<f64> = (0..300).map(|i| 0.0002 + (i as f64 % 5.0) * 0.00001).collect();
+        let jitter_without_outlier = estimate_jitter(&stable);
+
+        // один-единственный запрос вдруг занял 50ms вместо ~0.2ms
+        stable[0] = 0.050;
+        let jitter_with_outlier = estimate_jitter(&stable);
+
+        // MAD не должна взлетать в разы от одного выброса на 300 сэмплов —
+        // старая дисперсионная реализация здесь давала рост в десятки раз
+        assert!(
+            jitter_with_outlier < jitter_without_outlier * 3.0,
+            "a single outlier out of 300 samples should not blow up the jitter \
+             estimate this much: {jitter_without_outlier} -> {jitter_with_outlier}"
+        );
     }
 
     #[test]

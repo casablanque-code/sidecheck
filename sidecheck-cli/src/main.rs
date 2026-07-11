@@ -266,7 +266,7 @@ fn main() -> Result<()> {
             )?;
             let mut combined_pilot = pilot.class_a.clone();
             combined_pilot.extend(&pilot.class_b);
-            let jitter = stats::estimate_jitter(&combined_pilot, percentile);
+            let jitter = stats::estimate_jitter(&combined_pilot);
 
             let pilot_result =
                 stats::box_test(&pilot.class_a, &pilot.class_b, percentile, confidence);
