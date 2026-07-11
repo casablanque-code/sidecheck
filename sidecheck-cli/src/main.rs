@@ -117,6 +117,12 @@ enum Commands {
         /// чтобы не тратить часы на прогон, который всё равно будет inconclusive)
         #[arg(long, default_value_t = false)]
         force: bool,
+        /// Прогнать весь эксперимент (пилот + основной замер) N раз подряд
+        /// и показать, насколько стабильна оценка утечки между прогонами —
+        /// если результат "гуляет" от прогона к прогону, ему нельзя доверять
+        /// так же, как стабильному.
+        #[arg(long, default_value_t = 1)]
+        repeat: usize,
     },
 
     /// Pre-flight проверка сетевого канала до цели — до того, как тратить
@@ -178,6 +184,263 @@ fn read_secret(
     Ok(None)
 }
 
+/// Результат одного полного прогона check (пилот + основной замер).
+struct RunResult {
+    result: stats::BoxTestResult,
+    jitter_seconds: f64,
+    samples_per_class: usize,
+    raw: sampler::RawSamples,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_one_check(
+    target: &sampler::HttpTarget,
+    val_a: &str,
+    val_b: &str,
+    pilot_samples: usize,
+    block_size: usize,
+    max_samples: usize,
+    explicit_samples: Option<usize>,
+    percentile: f64,
+    confidence: f64,
+    force: bool,
+    show_progress: bool,
+    rng: &mut StdRng,
+) -> Result<RunResult> {
+    eprintln!("running pilot batch ({pilot_samples} samples/class) to estimate network jitter...");
+    let pilot = sampler::run_interleaved(
+        target,
+        val_a,
+        val_b,
+        pilot_samples,
+        block_size,
+        rng,
+        |_, _| {},
+    )?;
+    let mut combined_pilot = pilot.class_a.clone();
+    combined_pilot.extend(&pilot.class_b);
+    let jitter = stats::estimate_jitter(&combined_pilot);
+
+    let pilot_result = stats::box_test(&pilot.class_a, &pilot.class_b, percentile, confidence);
+    let pilot_leak = pilot_result.estimated_leak.abs();
+
+    // Считаем итоговый размер выборки одним проходом и печатаем одно
+    // связное сообщение о том, как мы к нему пришли — вместо того чтобы
+    // сначала объявить один план, а потом тут же его отменить.
+    let effective_samples = match explicit_samples {
+        Some(n) => {
+            eprintln!("using explicit --samples={n}");
+            n.max(MIN_SAMPLES)
+        }
+        None if pilot_leak <= 0.0 => {
+            let default_n = MIN_SAMPLES.max(5_000);
+            eprintln!(
+                "pilot found no measurable difference; using default sample size ({default_n})"
+            );
+            default_n
+        }
+        None => {
+            let needed = stats::required_samples(jitter, pilot_leak, confidence);
+            if needed as usize > max_samples {
+                let mean_request_time =
+                    combined_pilot.iter().sum::<f64>() / combined_pilot.len() as f64;
+                let capped = max_samples.max(MIN_SAMPLES);
+                let estimated_wall_seconds = mean_request_time * (capped * 2) as f64;
+
+                eprintln!(
+                    "warning: network jitter ({:.2} ms) is large relative to the \
+                     estimated effect ({:.1} μs) — signal-to-noise ratio is roughly \
+                     1:{:.0}. {} samples would be needed for a clean signal; \
+                     --max-samples={} would still fall far short and the result would \
+                     almost certainly be inconclusive.",
+                    jitter * 1000.0,
+                    pilot_leak * 1_000_000.0,
+                    jitter / pilot_leak,
+                    needed,
+                    max_samples
+                );
+                eprintln!(
+                    "  running the capped {capped} samples/class would take roughly \
+                     {} at this network's measured latency, for a result that likely \
+                     won't reach significance either way.",
+                    format_wall_time(estimated_wall_seconds)
+                );
+
+                if !force {
+                    eprintln!(
+                        "\nstopping before wasting that time. this usually means the \
+                         leak (if real) is too small to catch over this network path. \
+                         Options:\n  \
+                         - test from a lower-latency vantage point (same LAN/datacenter \
+                         as the target, or from the server itself against 127.0.0.1)\n  \
+                         - if you understand the result will likely be inconclusive and \
+                         want to run it anyway, pass --force\n  \
+                         - or raise --max-samples if you're willing to wait much longer"
+                    );
+                    std::process::exit(1);
+                }
+
+                eprintln!("  --force given, proceeding anyway.");
+                capped
+            } else if (needed as usize) < MIN_SAMPLES {
+                eprintln!(
+                    "pilot suggests a very large, easily detectable effect (~{:.1} μs); \
+                     using the floor of {MIN_SAMPLES} samples/class for stable percentile estimates",
+                    pilot_leak * 1_000_000.0
+                );
+                MIN_SAMPLES
+            } else {
+                eprintln!(
+                    "pilot suggests ~{:.1} μs effect; using {} samples/class for a clean signal",
+                    pilot_leak * 1_000_000.0,
+                    needed
+                );
+                needed as usize
+            }
+        }
+    };
+
+    let raw = if show_progress {
+        let pb = ProgressBar::new((effective_samples * 2) as u64);
+        pb.set_style(ProgressStyle::with_template("{bar:40} {pos}/{len} requests").unwrap());
+        let raw = sampler::run_interleaved(
+            target,
+            val_a,
+            val_b,
+            effective_samples,
+            block_size,
+            rng,
+            |done, total| {
+                pb.set_position(done as u64);
+                pb.set_length(total as u64);
+            },
+        )?;
+        pb.finish_and_clear();
+        raw
+    } else {
+        sampler::run_interleaved(
+            target,
+            val_a,
+            val_b,
+            effective_samples,
+            block_size,
+            rng,
+            |_, _| {},
+        )?
+    };
+
+    let result = stats::box_test(&raw.class_a, &raw.class_b, percentile, confidence);
+    Ok(RunResult {
+        result,
+        jitter_seconds: jitter,
+        samples_per_class: effective_samples,
+        raw,
+    })
+}
+
+/// При --repeat > 1 нужно разложить вывод (CSV/JSON) по отдельным файлам,
+/// иначе каждый следующий прогон затирает предыдущий. Вставляет "-runN"
+/// перед расширением; при repeat=1 путь не трогается.
+fn suffix_path(path: &std::path::Path, repeat: usize, index: usize) -> PathBuf {
+    if repeat <= 1 {
+        return path.to_path_buf();
+    }
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("report");
+    let ext = path.extension().and_then(|s| s.to_str());
+    let file_name = match ext {
+        Some(ext) => format!("{stem}-run{}.{ext}", index + 1),
+        None => format!("{stem}-run{}", index + 1),
+    };
+    path.with_file_name(file_name)
+}
+
+/// Печатает, насколько устойчива оценка утечки между независимыми
+/// прогонами --repeat. Разброс — не менее важный сигнал, чем сама оценка:
+/// если estimated leak "гуляет" от прогона к прогону, доверять ему нельзя
+/// так же, как стабильному результату, даже если каждый отдельный прогон
+/// формально значим.
+fn print_stability_summary(outcomes: &[(RunResult, DetectionReport)]) {
+    let leaks: Vec<f64> = outcomes
+        .iter()
+        .map(|(r, _)| r.result.estimated_leak)
+        .collect();
+    let significant_count = outcomes
+        .iter()
+        .filter(|(r, _)| r.result.is_significant())
+        .count();
+
+    let mean = leaks.iter().sum::<f64>() / leaks.len() as f64;
+    let min = leaks.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max = leaks.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let variance = leaks.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / leaks.len() as f64;
+    let std_dev = variance.sqrt();
+
+    println!("\n{}", "─".repeat(48));
+    println!("stability summary across {} runs", outcomes.len());
+    println!("{}", "─".repeat(48));
+    println!();
+    println!("significant in {significant_count}/{} runs", outcomes.len());
+    println!(
+        "estimated leak   mean {} · range [{}, {}] · std dev {}",
+        format_duration_public(mean),
+        format_duration_public(min),
+        format_duration_public(max),
+        format_duration_public(std_dev)
+    );
+
+    // Значимость — более надёжный сигнал устойчивости, чем относительное
+    // отклонение точечной оценки: когда реальной утечки нет, mean крутится
+    // около нуля, и любое крошечное абсолютное отклонение даёт огромное
+    // отношение std_dev/mean — это не нестабильность, а ожидаемое поведение
+    // при отсутствии эффекта. Поэтому сначала смотрим на согласованность
+    // вердикта "значимо/не значимо", и только для случая "все прогоны
+    // значимы" имеет смысл спрашивать, насколько стабильна сама величина.
+    if significant_count == 0 {
+        println!(
+            "\n✓ consistently no significant difference across {} runs.",
+            outcomes.len()
+        );
+    } else if significant_count == outcomes.len() {
+        if std_dev > mean.abs() * 0.5 {
+            println!(
+                "\n⚠ all runs found a significant effect, but its magnitude varies \
+                 substantially between runs (std dev is more than half the mean) — the \
+                 direction is consistent, but don't treat any single run's exact number \
+                 as precise."
+            );
+        } else {
+            println!("\n✓ consistently significant with a stable magnitude across runs.");
+        }
+    } else {
+        println!(
+            "\n⚠ significance is inconsistent across runs ({significant_count}/{} found a \
+             signal) — likely sitting right at the edge of detectability with this sample \
+             size; more samples per run would give a more decisive answer.",
+            outcomes.len()
+        );
+    }
+}
+
+// report.rs's format_duration is private to that module (it's an internal
+// formatting detail of DetectionReport::render); this is a small standalone
+// copy for the stability summary rather than making it a public API surface
+// sidecheck-core has to keep stable just for one CLI-side convenience print.
+fn format_duration_public(seconds: f64) -> String {
+    let abs = seconds.abs();
+    if abs >= 1.0 {
+        format!("{seconds:.3} s")
+    } else if abs >= 0.001 {
+        format!("{:.2} ms", seconds * 1_000.0)
+    } else if abs >= 0.000_001 {
+        format!("{:.1} μs", seconds * 1_000_000.0)
+    } else {
+        format!("{:.0} ns", seconds * 1_000_000_000.0)
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -203,6 +466,7 @@ fn main() -> Result<()> {
             report,
             seed,
             force,
+            repeat,
         } => {
             let injection = if let Some(name) = header {
                 InjectionPoint::Header(name)
@@ -257,137 +521,59 @@ fn main() -> Result<()> {
             eprintln!("injection point: {}\n", injection_desc);
 
             let target = sampler::HttpTarget::new_with_options(&url, injection, insecure)?;
+            let repeat = repeat.max(1);
 
-            eprintln!(
-                "running pilot batch ({pilot_samples} samples/class) to estimate network jitter..."
-            );
-            let pilot = sampler::run_interleaved(
-                &target,
-                &val_a,
-                &val_b,
-                pilot_samples,
-                block_size,
-                &mut rng,
-                |_, _| {},
-            )?;
-            let mut combined_pilot = pilot.class_a.clone();
-            combined_pilot.extend(&pilot.class_b);
-            let jitter = stats::estimate_jitter(&combined_pilot);
+            let mut outcomes: Vec<(RunResult, DetectionReport)> = Vec::with_capacity(repeat);
 
-            let pilot_result =
-                stats::box_test(&pilot.class_a, &pilot.class_b, percentile, confidence);
-            let pilot_leak = pilot_result.estimated_leak.abs();
-
-            // Считаем итоговый размер выборки одним проходом и печатаем одно
-            // связное сообщение о том, как мы к нему пришли — вместо того
-            // чтобы сначала объявить один план, а потом тут же его отменить.
-            let effective_samples = match samples {
-                Some(n) => {
-                    eprintln!("using explicit --samples={n}");
-                    n.max(MIN_SAMPLES)
+            for i in 0..repeat {
+                if repeat > 1 {
+                    println!("\n=== run {}/{repeat} ===", i + 1);
                 }
-                None if pilot_leak <= 0.0 => {
-                    let default_n = MIN_SAMPLES.max(5_000);
-                    eprintln!("pilot found no measurable difference; using default sample size ({default_n})");
-                    default_n
+
+                let run = run_one_check(
+                    &target,
+                    &val_a,
+                    &val_b,
+                    pilot_samples,
+                    block_size,
+                    max_samples,
+                    samples,
+                    percentile,
+                    confidence,
+                    force,
+                    repeat == 1,
+                    &mut rng,
+                )?;
+
+                if let Some(path) = &output_csv {
+                    let path = suffix_path(path, repeat, i);
+                    export::write_csv(&path, &run.raw)?;
+                    eprintln!("raw samples written to {}", path.display());
                 }
-                None => {
-                    let needed = stats::required_samples(jitter, pilot_leak, confidence);
-                    if needed as usize > max_samples {
-                        let mean_request_time =
-                            combined_pilot.iter().sum::<f64>() / combined_pilot.len() as f64;
-                        let capped = max_samples.max(MIN_SAMPLES);
-                        let estimated_wall_seconds = mean_request_time * (capped * 2) as f64;
 
-                        eprintln!(
-                            "warning: network jitter ({:.2} ms) is large relative to the \
-                             estimated effect ({:.1} μs) — signal-to-noise ratio is roughly \
-                             1:{:.0}. {} samples would be needed for a clean signal; \
-                             --max-samples={} would still fall far short and the result would \
-                             almost certainly be inconclusive.",
-                            jitter * 1000.0,
-                            pilot_leak * 1_000_000.0,
-                            jitter / pilot_leak,
-                            needed,
-                            max_samples
-                        );
-                        eprintln!(
-                            "  running the capped {capped} samples/class would take roughly \
-                             {} at this network's measured latency, for a result that likely \
-                             won't reach significance either way.",
-                            format_wall_time(estimated_wall_seconds)
-                        );
+                let detection_report = DetectionReport {
+                    target: url.clone(),
+                    field: injection_desc.clone(),
+                    samples_per_class: run.samples_per_class,
+                    result: run.result.clone(),
+                    jitter_seconds: run.jitter_seconds,
+                    failures: run.raw.failures,
+                    seed,
+                    sidecheck_version: env!("CARGO_PKG_VERSION").to_string(),
+                };
+                println!("{}", detection_report.render());
 
-                        if !force {
-                            eprintln!(
-                                "\nstopping before wasting that time. this usually means the \
-                                 leak (if real) is too small to catch over this network path. \
-                                 Options:\n  \
-                                 - test from a lower-latency vantage point (same LAN/datacenter \
-                                 as the target, or from the server itself against 127.0.0.1)\n  \
-                                 - if you understand the result will likely be inconclusive and \
-                                 want to run it anyway, pass --force\n  \
-                                 - or raise --max-samples if you're willing to wait much longer"
-                            );
-                            std::process::exit(1);
-                        }
-
-                        eprintln!("  --force given, proceeding anyway.");
-                        capped
-                    } else if (needed as usize) < MIN_SAMPLES {
-                        eprintln!(
-                            "pilot suggests a very large, easily detectable effect (~{:.1} μs); \
-                             using the floor of {MIN_SAMPLES} samples/class for stable percentile estimates",
-                            pilot_leak * 1_000_000.0
-                        );
-                        MIN_SAMPLES
-                    } else {
-                        eprintln!(
-                            "pilot suggests ~{:.1} μs effect; using {} samples/class for a clean signal",
-                            pilot_leak * 1_000_000.0, needed
-                        );
-                        needed as usize
-                    }
+                if let Some(path) = &report {
+                    let path = suffix_path(path, repeat, i);
+                    export::write_json(&path, &detection_report)?;
+                    eprintln!("JSON report written to {}", path.display());
                 }
-            };
 
-            let pb = ProgressBar::new((effective_samples * 2) as u64);
-            pb.set_style(ProgressStyle::with_template("{bar:40} {pos}/{len} requests").unwrap());
-            let raw = sampler::run_interleaved(
-                &target,
-                &val_a,
-                &val_b,
-                effective_samples,
-                block_size,
-                &mut rng,
-                |done, total| {
-                    pb.set_position(done as u64);
-                    pb.set_length(total as u64);
-                },
-            )?;
-            pb.finish_and_clear();
-
-            if let Some(path) = &output_csv {
-                export::write_csv(path, &raw)?;
-                eprintln!("raw samples written to {}", path.display());
+                outcomes.push((run, detection_report));
             }
 
-            let result = stats::box_test(&raw.class_a, &raw.class_b, percentile, confidence);
-            let detection_report = DetectionReport {
-                target: url,
-                field: injection_desc,
-                samples_per_class: effective_samples,
-                result,
-                jitter_seconds: jitter,
-                failures: raw.failures,
-                seed,
-                sidecheck_version: env!("CARGO_PKG_VERSION").to_string(),
-            };
-            println!("{}", detection_report.render());
-
-            if let Some(path) = &report {
-                export::write_json(path, &detection_report)?;
-                eprintln!("JSON report written to {}", path.display());
+            if repeat > 1 {
+                print_stability_summary(&outcomes);
             }
 
             Ok(())

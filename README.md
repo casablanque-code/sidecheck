@@ -166,7 +166,45 @@ clean up after the fact.
 Every run picks (or accepts via `--seed`) a seed that determines the
 request interleaving order and the generated wrong value. It's printed in
 the report and the JSON output — pass it back with `--seed` to reproduce
-the exact same request sequence, e.g. when debugging an odd result.
+the exact same request sequence, e.g. when debugging an odd result. Note
+that with `--repeat`, `--seed` reproduces the *whole sequence* of runs,
+not a single run in isolation — each repeat continues drawing from the
+same RNG stream rather than restarting it.
+
+## Checking whether one run's estimate can be trusted
+
+A single run's `estimated leak` is one point estimate; it doesn't tell you
+whether that number would look similar if you ran it again. `--repeat N`
+runs the full pilot+measurement cycle N times and summarizes how much the
+estimate and the significance verdict actually move around:
+
+```sh
+sidecheck check https://myapp.local/login --header X-API-Key --secret-env API_KEY --repeat 5
+```
+
+```
+────────────────────────────────────────────────
+stability summary across 5 runs
+────────────────────────────────────────────────
+
+significant in 5/5 runs
+estimated leak   mean 12.23 ms · range [12.20 ms, 12.25 ms] · std dev 21.8 μs
+
+✓ consistently significant with a stable magnitude across runs.
+```
+
+The verdict prioritizes whether the significance call itself is
+consistent (0/N or N/N) over the raw variance of the point estimate —
+when there's genuinely no leak, the mean sits near zero and any tiny
+absolute wobble would otherwise look like huge *relative* instability,
+which is a statistical artifact of dividing by ~zero, not a real problem.
+Mixed significance (some runs flag it, some don't) is the case actually
+worth distrusting — it usually means the effect sits right at the edge of
+what the sample size can resolve.
+
+With `--output-csv`/`--report`, each repeat gets its own file
+(`report-run1.json`, `report-run2.json`, ...) rather than overwriting the
+same one N times.
 
 ## When sidecheck refuses to run
 
@@ -244,14 +282,13 @@ fixtures (`realistic-fixtures/`, Go and Node) confirming that a real
 even on loopback, can exceed a nanosecond-scale CPU-level leak. That's an
 honest limit of the method, not a bug (see Limitations above).
 
-Not yet done: `--repeat N` (stability check across repeated full runs),
-reference targets for FastAPI/Express/Actix/Axum/Spring (only Go/Node so
-far), a longer-secret sweep to find the HTTP-detectable crossover length,
-CI coverage of the actual detection logic end-to-end (current CI only
-runs fmt/clippy/unit-tests, not a real check-against-a-fixture pass),
-crates.io publishing. Then SSH/TLS key entropy auditing (shared-prime-
-factor detection via batch-GCD across your own fleet) as the next major
-feature, separate from timing analysis.
+Not yet done: reference targets for FastAPI/Express/Actix/Axum/Spring
+(only Go/Node so far), a longer-secret sweep to find the HTTP-detectable
+crossover length, CI coverage of the actual detection logic end-to-end
+(current CI only runs fmt/clippy/unit-tests, not a real check-against-a-
+fixture pass), crates.io publishing. Then SSH/TLS key entropy auditing
+(shared-prime-factor detection via batch-GCD across your own fleet) as
+the next major feature, separate from timing analysis.
 
 ## Build
 
