@@ -3,6 +3,7 @@ use clap::{ArgGroup, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use sidecheck_core::{
+    doctor::DoctorReport,
     export,
     report::DetectionReport,
     sampler::{self, InjectionPoint},
@@ -110,6 +111,20 @@ enum Commands {
         /// чтобы не тратить часы на прогон, который всё равно будет inconclusive)
         #[arg(long, default_value_t = false)]
         force: bool,
+    },
+
+    /// Pre-flight проверка сетевого канала до цели — до того, как тратить
+    /// время на полноценный check. Отвечает на вопрос "стоит ли вообще
+    /// пытаться измерять timing здесь", а не "есть ли утечка".
+    Doctor {
+        /// URL цели, например https://myapp.local/login
+        url: String,
+        /// Число замеров для оценки RTT/джиттера/потерь
+        #[arg(long, default_value_t = 300)]
+        samples: usize,
+        /// Принимать самоподписанные/невалидные TLS-сертификаты
+        #[arg(long, default_value_t = false)]
+        insecure: bool,
     },
 }
 
@@ -368,6 +383,32 @@ fn main() -> Result<()> {
                 export::write_json(path, &detection_report)?;
                 eprintln!("JSON report written to {}", path.display());
             }
+
+            Ok(())
+        }
+
+        Commands::Doctor { url, samples, insecure } => {
+            // doctor не сравнивает классы — просто гоняет один и тот же
+            // безобидный запрос n раз и смотрит на форму распределения.
+            let injection = InjectionPoint::Header("X-Sidecheck-Doctor".to_string());
+            let target = sampler::HttpTarget::new_with_options(&url, injection, insecure)?;
+
+            eprintln!("probing {url} ({samples} requests)...");
+            let pb = ProgressBar::new(samples as u64);
+            pb.set_style(ProgressStyle::with_template("{bar:40} {pos}/{len} requests").unwrap());
+            let result = sampler::collect_plain(&target, "probe", samples, |done, total| {
+                pb.set_position(done as u64);
+                pb.set_length(total as u64);
+            });
+            pb.finish_and_clear();
+
+            if result.latencies.is_empty() {
+                eprintln!("error: all {samples} requests failed — can't reach {url} at all.");
+                std::process::exit(1);
+            }
+
+            let doctor_report = DoctorReport::from_measurements(url, &result.latencies, result.failures);
+            println!("{}", doctor_report.render());
 
             Ok(())
         }

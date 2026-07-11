@@ -1,3 +1,4 @@
+pub mod doctor;
 #[cfg(feature = "http")]
 pub mod export;
 pub mod report;

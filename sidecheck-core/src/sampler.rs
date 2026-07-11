@@ -187,3 +187,31 @@ pub fn run_interleaved(
 
     Ok(result)
 }
+
+/// Результат простого сбора замеров для `sidecheck doctor` — без деления
+/// на классы, нас интересует только форма распределения RTT до цели.
+#[derive(Debug, Default)]
+pub struct PlainSamples {
+    pub latencies: Vec<f64>,
+    pub failures: usize,
+}
+
+/// Собирает n последовательных замеров одного и того же запроса. В отличие
+/// от run_interleaved — не прерывается на потерях пакетов, а считает их: для
+/// doctor-режима сам процент потерь и есть часть диагноза, а не повод остановиться.
+pub fn collect_plain(
+    target: &HttpTarget,
+    value: &str,
+    n: usize,
+    mut on_progress: impl FnMut(usize, usize),
+) -> PlainSamples {
+    let mut result = PlainSamples::default();
+    for i in 0..n {
+        match target.measure(value) {
+            Ok(elapsed) => result.latencies.push(elapsed),
+            Err(_) => result.failures += 1,
+        }
+        on_progress(i + 1, n);
+    }
+    result
+}
