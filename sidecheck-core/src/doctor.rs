@@ -81,7 +81,11 @@ impl DoctorReport {
 
         let mut sorted = latencies.to_vec();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let median_rtt_seconds = if sorted.is_empty() { 0.0 } else { percentile(&sorted, 50.0) };
+        let median_rtt_seconds = if sorted.is_empty() {
+            0.0
+        } else {
+            percentile(&sorted, 50.0)
+        };
 
         // используем ту же (теперь робастную к выбросам, MAD-based) оценку
         // джиттера, что и основной pipeline check — раньше здесь был
@@ -95,7 +99,14 @@ impl DoctorReport {
             0
         };
 
-        Self { target, samples, median_rtt_seconds, jitter_seconds, packet_loss_ratio, recommended_samples }
+        Self {
+            target,
+            samples,
+            median_rtt_seconds,
+            jitter_seconds,
+            packet_loss_ratio,
+            recommended_samples,
+        }
     }
 
     fn quality(&self) -> EnvironmentQuality {
@@ -126,9 +137,19 @@ impl DoctorReport {
         out.push_str(&"─".repeat(48));
         out.push_str(&format!("\n\ntarget                {}\n", self.target));
         out.push_str(&format!("samples                {}\n\n", self.samples));
-        out.push_str(&format!("median RTT:            {:.1} ms\n", self.median_rtt_seconds * 1000.0));
-        out.push_str(&format!("RTT jitter:            {:.2} ms ({})\n", self.jitter_seconds * 1000.0, jitter_level.label()));
-        out.push_str(&format!("packet loss:           {:.1}%\n", self.packet_loss_ratio * 100.0));
+        out.push_str(&format!(
+            "median RTT:            {:.1} ms\n",
+            self.median_rtt_seconds * 1000.0
+        ));
+        out.push_str(&format!(
+            "RTT jitter:            {:.2} ms ({})\n",
+            self.jitter_seconds * 1000.0,
+            jitter_level.label()
+        ));
+        out.push_str(&format!(
+            "packet loss:           {:.1}%\n",
+            self.packet_loss_ratio * 100.0
+        ));
         if self.recommended_samples > 50_000_000 {
             out.push_str("recommended samples:   effectively unbounded — a ~1μs leak is not\n                       reliably measurable over this path\n");
         } else {

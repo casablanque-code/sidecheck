@@ -24,6 +24,12 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+// Commands парсится и матчится один раз при старте, не хранится в
+// коллекциях и не в горячем пути — разница в размере вариантов (Check
+// заметно больше Doctor) здесь не имеет практического значения. Боксинг
+// отдельных полей ради этого линта добавил бы косвенность без реальной
+// выгоды.
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Проверить HTTP-эндпоинт на timing side-channel
     #[command(group(
@@ -387,7 +393,11 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Doctor { url, samples, insecure } => {
+        Commands::Doctor {
+            url,
+            samples,
+            insecure,
+        } => {
             // doctor не сравнивает классы — просто гоняет один и тот же
             // безобидный запрос n раз и смотрит на форму распределения.
             let injection = InjectionPoint::Header("X-Sidecheck-Doctor".to_string());
@@ -407,7 +417,8 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
 
-            let doctor_report = DoctorReport::from_measurements(url, &result.latencies, result.failures);
+            let doctor_report =
+                DoctorReport::from_measurements(url, &result.latencies, result.failures);
             println!("{}", doctor_report.render());
 
             Ok(())
