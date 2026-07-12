@@ -32,3 +32,51 @@ jobs:
 
       - name: cargo build --release
         run: cargo build --workspace --release
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --release
+        run: cargo build --workspace --release
+
+      - name: Start reference fixture
+        run: |
+          python3 test-fixture/test_fixture.py &
+          for i in $(seq 1 20); do
+            curl -sf -o /dev/null http://127.0.0.1:8000/safe -H "X-API-Key: x" && break
+            sleep 0.5
+          done
+
+      - name: check flags the vulnerable endpoint
+        run: |
+          ./target/release/sidecheck check http://127.0.0.1:8000/vulnerable \
+            --header X-API-Key --secret correct-secret-key-123456 \
+            --samples 3000 --report /tmp/vulnerable.json
+          python3 -c "
+          import json
+          r = json.load(open('/tmp/vulnerable.json'))
+          assert r['significant'] is True, f'expected a detected leak, got: {r}'
+          print('OK: vulnerable endpoint correctly flagged, leak =', r['estimated_leak_us'], 'us')
+          "
+
+      - name: check stays quiet on the safe endpoint
+        run: |
+          ./target/release/sidecheck check http://127.0.0.1:8000/safe \
+            --header X-API-Key --secret correct-secret-key-123456 \
+            --samples 3000 --report /tmp/safe.json
+          python3 -c "
+          import json
+          r = json.load(open('/tmp/safe.json'))
+          assert r['significant'] is False, f'expected no leak, got a false positive: {r}'
+          print('OK: safe endpoint correctly not flagged')
+          "
+
+      - name: sidecheck doctor runs cleanly
+        run: ./target/release/sidecheck doctor http://127.0.0.1:8000/safe

@@ -1,0 +1,26 @@
+name: Audit
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+  schedule:
+    # раз в неделю — новые RustSec-советы появляются и без изменений в
+    # наших зависимостях, security-инструмент не может позволить себе
+    # узнавать об этом только по коммитам
+    - cron: "0 6 * * 1"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
