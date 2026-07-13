@@ -1,0 +1,15 @@
+# Explicit policy for informational advisories cargo-audit already treats
+# as non-blocking by default — documented here instead of relying on
+# implicit default behavior, so the reasoning survives even if a future
+# cargo-audit version changes its defaults.
+[advisories]
+ignore = [
+    # number_prefix (transitive dep of indicatif) — unmaintained, not a
+    # vulnerability. indicatif has no unmaintained replacement dependency
+    # yet; revisit when indicatif drops it or ships an alternative.
+    "RUSTSEC-2025-0119",
+    # rustls-pemfile (transitive dep via reqwest's TLS stack) — unmaintained,
+    # not a vulnerability. Not something we can bump independently of
+    # reqwest's own dependency choices.
+    "RUSTSEC-2025-0134",
+]
