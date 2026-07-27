@@ -485,12 +485,11 @@ fn main() -> Result<()> {
             } else if let Some(name) = json_field {
                 let template = match json_body {
                     Some(raw) => {
-                        let value: serde_json::Value = serde_json::from_str(&raw)
-                            .context("--json-body is not valid JSON")?;
-                        let mut obj = value
-                            .as_object()
-                            .cloned()
-                            .context("--json-body must be a JSON object, e.g. '{\"username\": \"admin\"}'")?;
+                        let value: serde_json::Value =
+                            serde_json::from_str(&raw).context("--json-body is not valid JSON")?;
+                        let mut obj = value.as_object().cloned().context(
+                            "--json-body must be a JSON object, e.g. '{\"username\": \"admin\"}'",
+                        )?;
                         obj.remove(&name);
                         Some(obj)
                     }
