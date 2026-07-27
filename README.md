@@ -68,6 +68,19 @@ sidecheck check https://myapp.local/api --query token --secret "..."
 sidecheck check https://myapp.local/login --json-field password --secret "..."
 ```
 
+Most real login endpoints need more than just the field under test in the
+body — a `username`/`email` the backend has to look up before it even
+reaches the password comparison. Use `--json-body` to supply the rest of
+the body as a template; `--json-field` is still what gets swapped between
+the two compared values on every request:
+
+```sh
+sidecheck check https://myapp.local/login \
+  --json-field password \
+  --json-body '{"username": "admin"}' \
+  --secret "..."
+```
+
 Advanced mode — full control over both compared values (e.g. to test a
 specific guessed prefix instead of the full secret):
 

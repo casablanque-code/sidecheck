@@ -55,6 +55,15 @@ enum Commands {
         /// Подставлять значение в поле JSON-тела POST-запроса
         #[arg(long, value_name = "NAME")]
         json_field: Option<String>,
+        /// Шаблон остальных полей JSON-тела (нужен, только если эндпоинту
+        /// кроме --json-field требуются другие поля, чтобы дойти до
+        /// сравнения секрета), например:
+        /// --json-body '{"username": "admin"}'
+        /// Поле из --json-field в шаблон подставлять не нужно — оно
+        /// добавляется/перезаписывается автоматически на каждом запросе.
+        /// Требует --json-field.
+        #[arg(long, value_name = "JSON", requires = "json_field")]
+        json_body: Option<String>,
 
         /// Простой режим: твой настоящий секрет прямо аргументом. Виден в
         /// `ps aux` и попадёт в историю шелла — для чувствительных секретов
@@ -450,6 +459,7 @@ fn main() -> Result<()> {
             header,
             query,
             json_field,
+            json_body,
             secret,
             secret_env,
             secret_stdin,
@@ -473,7 +483,23 @@ fn main() -> Result<()> {
             } else if let Some(name) = query {
                 InjectionPoint::Query(name)
             } else if let Some(name) = json_field {
-                InjectionPoint::JsonBody(name)
+                let template = match json_body {
+                    Some(raw) => {
+                        let value: serde_json::Value = serde_json::from_str(&raw)
+                            .context("--json-body is not valid JSON")?;
+                        let mut obj = value
+                            .as_object()
+                            .cloned()
+                            .context("--json-body must be a JSON object, e.g. '{\"username\": \"admin\"}'")?;
+                        obj.remove(&name);
+                        Some(obj)
+                    }
+                    None => None,
+                };
+                InjectionPoint::JsonBody {
+                    field: name,
+                    template,
+                }
             } else {
                 unreachable!("clap ArgGroup guarantees exactly one injection point")
             };

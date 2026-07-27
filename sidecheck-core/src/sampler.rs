@@ -18,8 +18,14 @@ use std::time::Instant;
 pub enum InjectionPoint {
     Header(String),
     Query(String),
-    /// Имя поля в плоском JSON-объекте тела запроса
-    JsonBody(String),
+    /// Имя поля в JSON-объекте тела запроса, плюс опциональный шаблон
+    /// остальных полей (например {"username": "admin"}), которые бэкенду
+    /// нужны, чтобы вообще дойти до сравнения секрета. Если шаблон не
+    /// задан — тело как раньше состоит из одного этого поля.
+    JsonBody {
+        field: String,
+        template: Option<serde_json::Map<String, serde_json::Value>>,
+    },
 }
 
 impl InjectionPoint {
@@ -27,7 +33,10 @@ impl InjectionPoint {
         match self {
             InjectionPoint::Header(n) => format!("header {n}"),
             InjectionPoint::Query(n) => format!("query param {n}"),
-            InjectionPoint::JsonBody(n) => format!("JSON field {n}"),
+            InjectionPoint::JsonBody { field, template } => match template {
+                Some(_) => format!("JSON field {field} (with body template)"),
+                None => format!("JSON field {field}"),
+            },
         }
     }
 }
@@ -80,9 +89,13 @@ impl HttpTarget {
                 .get(&self.url)
                 .query(&[(name.as_str(), value)])
                 .send(),
-            InjectionPoint::JsonBody(field) => {
-                let body = serde_json::json!({ field: value });
-                self.client.post(&self.url).json(&body).send()
+            InjectionPoint::JsonBody { field, template } => {
+                let mut body = template.clone().unwrap_or_default();
+                body.insert(field.clone(), serde_json::Value::String(value.to_string()));
+                self.client
+                    .post(&self.url)
+                    .json(&serde_json::Value::Object(body))
+                    .send()
             }
         }
         .context("request failed")?;
