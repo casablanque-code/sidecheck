@@ -1,0 +1,64 @@
+name: Prepare Release
+
+# Единственный шаг с человеком в цикле: Actions → Prepare Release →
+# Run workflow → ввести версию. Дальше всё автоматически:
+#   1. version в [workspace.package] корневого Cargo.toml бампается —
+#      единственное место во всём workspace; sidecheck-core и sidecheck
+#      (CLI) читают его через version.workspace = true, так что оба
+#      крейта всегда идут в паре, версия в версию.
+#   2. коммит "chore(release): vX.Y.Z"
+#   3. тег vX.Y.Z, пуш коммита и тега
+#   4. пуш тега триггерит .github/workflows/release.yml — тот уже сам
+#      публикует оба крейта на crates.io (идемпотентно) и собирает
+#      GitHub Release с бинарниками
+#
+# Больше никогда не редактировать .toml руками ради релиза sidecheck.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Новая версия, semver без 'v' (например 0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  bump-and-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version format
+        run: |
+          v="${{ github.event.inputs.version }}"
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "Версия должна быть X.Y.Z без 'v' и суффиксов, получено: '$v'";
+            exit 1;
+          }
+
+      - name: Check tag doesn't already exist
+        run: |
+          if git rev-parse "v${{ github.event.inputs.version }}" >/dev/null 2>&1; then
+            echo "Тег v${{ github.event.inputs.version }} уже существует";
+            exit 1;
+          fi
+
+      - name: Bump workspace version
+        run: |
+          v="${{ github.event.inputs.version }}"
+          sed -i 's/^version = ".*"$/version = "'"$v"'"/' Cargo.toml
+          grep '^version = ' Cargo.toml
+
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml
+          git commit -m "chore(release): v${{ github.event.inputs.version }}"
+          git tag -a "v${{ github.event.inputs.version }}" -m "sidecheck v${{ github.event.inputs.version }}"
+          git push origin HEAD:main
+          git push origin "v${{ github.event.inputs.version }}"

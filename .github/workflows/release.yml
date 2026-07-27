@@ -1,0 +1,162 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Ловит рассогласование тега и Cargo.toml ДО сборки (см. netconv:
+  # ручной `git tag` в обход Prepare Release однажды разошёлся с
+  # версией в манифесте, и бинарник печатал не тот --version).
+  check-version:
+    name: check tag matches Cargo.toml version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare tag to workspace version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          echo "tag: $tag, Cargo.toml: $cargo_version"
+          if [ "$tag" != "$cargo_version" ]; then
+            echo "::error::Tag v$tag does not match [workspace.package] version ($cargo_version) in Cargo.toml. Use Actions → Prepare Release instead of tagging manually."
+            exit 1
+          fi
+
+  # sidecheck-core и sidecheck (CLI) делят одну workspace-версию, но
+  # публикуются на crates.io отдельными cargo publish -p — поэтому
+  # каждый шаг идемпотентный: проверяет sparse index и пропускает уже
+  # опубликованную версию, а не падает. Порядок важен — CLI зависит от
+  # core, core публикуется первым.
+  publish-crates:
+    name: publish to crates.io
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish sidecheck-core (if new version)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          name=sidecheck-core
+          version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          echo "local $name version: $version"
+
+          len=${#name}
+          if   [ "$len" -le 2 ]; then idx_path="$len/$name"
+          elif [ "$len" -eq 3 ]; then idx_path="3/${name:0:1}/$name"
+          else idx_path="${name:0:2}/${name:2:2}/$name"
+          fi
+
+          if curl -sf "https://index.crates.io/$idx_path" 2>/dev/null | grep -qF "\"vers\":\"$version\","; then
+            echo "$name $version is already published, skipping"
+          else
+            cargo package -p "$name"
+            cargo publish -p "$name"
+            echo "waiting for crates.io index to pick up $name $version..."
+            sleep 30
+          fi
+
+      - name: Publish sidecheck CLI (if new version)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          name=sidecheck
+          version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          echo "local $name version: $version"
+
+          len=${#name}
+          if   [ "$len" -le 2 ]; then idx_path="$len/$name"
+          elif [ "$len" -eq 3 ]; then idx_path="3/${name:0:1}/$name"
+          else idx_path="${name:0:2}/${name:2:2}/$name"
+          fi
+
+          if curl -sf "https://index.crates.io/$idx_path" 2>/dev/null | grep -qF "\"vers\":\"$version\","; then
+            echo "$name $version is already published, skipping"
+          else
+            cargo package -p "$name"
+            cargo publish -p "$name"
+          fi
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: check-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: sidecheck-linux-x86_64
+            bin: sidecheck
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: sidecheck-macos-x86_64
+            bin: sidecheck
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: sidecheck-macos-aarch64
+            bin: sidecheck
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: sidecheck-windows-x86_64.exe
+            bin: sidecheck.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - run: cargo build --release -p sidecheck --target ${{ matrix.target }}
+
+      - name: Package binary
+        shell: bash
+        run: cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "${{ matrix.artifact }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    name: create GitHub release
+    needs: [build, publish-crates]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release-assets
+          find dist -type f -exec cp {} release-assets/ \;
+          ls -la release-assets
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
