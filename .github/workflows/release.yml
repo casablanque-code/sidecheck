@@ -170,8 +170,17 @@ jobs:
           find dist -type f -exec cp {} release-assets/ \;
           ls -la release-assets
 
+      - name: Resolve tag name
+        id: tag
+        run: |
+          # RELEASE_REF is either a full ref (push: refs/tags/v0.2.1) or
+          # a short tag (workflow_dispatch: v0.2.1) — normalize to short.
+          tag="${RELEASE_REF#refs/tags/}"
+          echo "name=$tag" >> "$GITHUB_OUTPUT"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.name }}
           files: release-assets/*
           generate_release_notes: true
