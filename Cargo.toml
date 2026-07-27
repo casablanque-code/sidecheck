@@ -3,8 +3,9 @@ resolver = "2"
 members = ["sidecheck-core", "sidecheck-cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+rust-version = "1.85"
 license = "MIT"
 repository = "https://github.com/casablanque-code/sidecheck"
 description = "Remote timing side-channel auditor for your own HTTP services"

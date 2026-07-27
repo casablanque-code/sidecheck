@@ -303,11 +303,28 @@ fixture pass), crates.io publishing. Then SSH/TLS key entropy auditing
 (shared-prime-factor detection via batch-GCD across your own fleet) as
 the next major feature, separate from timing analysis.
 
-## Build
+## Install
 
-Requires a recent stable Rust toolchain (edition 2021, current crates need
-a fairly modern `rustc` — install via [rustup](https://rustup.rs), not your
-distro's package manager).
+```sh
+cargo install --locked sidecheck
+```
+
+`--locked` matters here: without it, `cargo install` re-resolves
+dependencies against whatever is newest on crates.io today, which can pull
+in transitive crates that require the 2024 Rust edition — you'll see an
+error like `feature edition2024 is required`. `--locked` uses the
+`Cargo.lock` committed in this repo instead, which is known to build.
+
+We also declare `rust-version = "1.85"` (see `Cargo.toml`, edition2024
+stabilized in that release) — on Cargo 1.85+ this makes dependency
+resolution itself MSRV-aware, so even a fresh `cargo install` without
+`--locked` will avoid transitive versions that need a newer edition than
+we declare. That awareness doesn't exist on Cargo versions older than
+1.85 (e.g. the one some LTS distros ship by default), which is exactly
+why `--locked` is still the belt-and-suspenders recommendation above —
+update via [rustup](https://rustup.rs) if your system Cargo predates 1.85.
+
+## Build
 
 ```sh
 cargo build --release
