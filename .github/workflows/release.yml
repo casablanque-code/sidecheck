@@ -4,12 +4,20 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег для ручного релиза, например v0.2.1 (на случай если push тега не триггернул этот workflow автоматически)"
+        required: true
 
 permissions:
   contents: write
 
 env:
   CARGO_TERM_COLOR: always
+  # workflow_dispatch чекаутит ветку по умолчанию, не тег — этим резолвим
+  # правильный ref для всех джобов независимо от способа запуска.
+  RELEASE_REF: ${{ github.event.inputs.tag || github.ref }}
 
 jobs:
   # Ловит рассогласование тега и Cargo.toml ДО сборки (см. netconv:
@@ -20,10 +28,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
 
       - name: Compare tag to workspace version
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          tag="${RELEASE_REF#refs/tags/}"
+          tag="${tag#v}"
           cargo_version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
           echo "tag: $tag, Cargo.toml: $cargo_version"
           if [ "$tag" != "$cargo_version" ]; then
@@ -42,6 +53,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -119,6 +132,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:

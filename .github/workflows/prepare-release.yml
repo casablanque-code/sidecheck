@@ -31,6 +31,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # GITHUB_TOKEN (default actions/checkout token) intentionally
+          # cannot trigger other workflows when it pushes — this is how
+          # the tag push below would fail to kick off release.yml.
+          # RELEASE_PAT is a personal access token (repo scope is enough)
+          # stored as a repo secret, used only so the tag push counts as
+          # an external push and release.yml's `on: push: tags` fires.
+          token: ${{ secrets.RELEASE_PAT }}
 
       - name: Validate version format
         run: |
