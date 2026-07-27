@@ -61,8 +61,9 @@ enum Commands {
         /// --json-body '{"username": "admin"}'
         /// Поле из --json-field в шаблон подставлять не нужно — оно
         /// добавляется/перезаписывается автоматически на каждом запросе.
-        /// Требует --json-field.
-        #[arg(long, value_name = "JSON", requires = "json_field")]
+        /// Требует --json-field (проверяется вручную — clap's `requires`
+        /// не срабатывает надёжно в сочетании с ArgGroup здесь).
+        #[arg(long, value_name = "JSON")]
         json_body: Option<String>,
 
         /// Простой режим: твой настоящий секрет прямо аргументом. Виден в
@@ -478,6 +479,13 @@ fn main() -> Result<()> {
             force,
             repeat,
         } => {
+            if json_body.is_some() && json_field.is_none() {
+                anyhow::bail!(
+                    "--json-body requires --json-field (it fills in the rest of the JSON \
+                     body around the field --json-field injects into; without --json-field \
+                     there's nothing to inject)"
+                );
+            }
             let injection = if let Some(name) = header {
                 InjectionPoint::Header(name)
             } else if let Some(name) = query {
