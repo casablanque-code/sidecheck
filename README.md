@@ -140,12 +140,20 @@ samples                300
 median RTT:            8.2 ms
 RTT jitter:            0.42 ms (low)
 packet loss:           0.0%
-recommended samples:   ~1200 (to reliably detect a ~1μs leak, the
+recommended samples:   ~2765881 (to reliably detect a ~1μs leak, the
                        rough scale of a real == vs constant-time bug)
 environment quality:   GOOD
 ────────────────────────────────────────────────
 this path looks suitable for timing measurement. proceed with `sidecheck check`.
 ```
+
+Note the recommended sample count above is large even for a "GOOD" quality
+path — `GOOD` means the path is *stable enough that this estimate is
+meaningful*, not that the run will be fast. A ~1μs leak is genuinely hard
+to see behind 0.42ms of jitter; that gap is exactly why the estimate is in
+the millions here. `check` sizes its own run automatically and will refuse
+to proceed past `--max-samples` (default 200,000) unless you pass `--force`
+— see below.
 
 `check` itself already estimates this from its own pilot batch and refuses
 to run an infeasible full measurement by default (see below) — `doctor` is
