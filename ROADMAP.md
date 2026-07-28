@@ -13,6 +13,9 @@
   Release)
 - MSRV declared (`rust-version = "1.85"`), `cargo install --locked`
   documented as the safe install path
+- CI runs live `check`/`doctor` end-to-end against the amplified Python
+  fixture (positive/negative cases, `--json-body` injection and its
+  argument-validation regressions), in addition to fmt/clippy/unit tests
 
 ## Next: killer feature — a GitHub Action
 
@@ -64,9 +67,9 @@ shape:
       a real (non-amplified) leak becomes reliably detectable over actual
       HTTP, as a data point rather than something every user has to
       rediscover themselves
-- [ ] CI coverage of the actual detection logic against a live fixture
-      end-to-end (current CI runs fmt/clippy/unit tests, not a real
-      `check`-against-a-fixture pass)
+- [ ] CI coverage of the Go/Node realistic fixtures specifically —
+      currently only the amplified Python fixture runs in CI (installing
+      go/node toolchains in the e2e job is the remaining work)
 - [ ] Shared-prime-factor detection via batch-GCD across a fleet of keys
       — a different vulnerability class entirely, kept separate from
       timing analysis, but a natural next audit to bolt onto the same CLI

@@ -60,9 +60,12 @@ confirming the detectability limits above.
 Not yet done: reference targets for FastAPI/Express/Actix/Axum/Spring
 (only Go/Node so far), a longer-secret sweep to find the HTTP-detectable
 crossover length as a documented data point rather than something you
-have to discover yourself, and CI coverage of the actual detection logic
-against a live fixture end-to-end (current CI runs fmt/clippy/unit tests,
-not a real `check`-against-a-fixture pass).
+have to discover yourself, and CI coverage of the realistic (non-amplified)
+Go/Node fixtures specifically — CI does run `check`/`doctor` end-to-end
+against the amplified Python fixture (header and `--json-body` injection,
+positive and negative cases, argument-validation regressions) plus
+fmt/clippy/unit tests, but not yet the Go/Node fixtures, since those need
+toolchains CI doesn't currently install.
 
 See [ROADMAP.md](../ROADMAP.md) for planned features, including a
 GitHub Action for CI timing-regression gates.
