@@ -1,16 +1,17 @@
-//! `sidecheck doctor` — быстрая pre-flight проверка канала до цели, ДО того
-//! как тратить время на полноценный тест. Отвечает на вопрос "стоит ли вообще
-//! пробовать измерять timing-утечку по этому пути", а не "есть ли утечка".
+//! `sidecheck doctor` is a measurement feasibility estimator: a fast
+//! pre-flight check of the path to the target, run BEFORE spending time on
+//! a full test. It answers "is it even worth trying to measure a timing
+//! leak over this path", not "is there a leak".
 
 use crate::stats::{estimate_jitter, percentile, required_samples};
 
-/// Условный размер "типичной" реальной утечки от небезопасного сравнения —
-/// не искусственно усиленной, а такой, какая бывает от `==` вместо
-/// constant-time сравнения в реальном скомпилированном коде: единицы
-/// микросекунд. Используется только чтобы дать осмысленную рекомендацию по
-/// числу сэмплов ДО того, как у нас появится реальная оценка эффекта из
-/// пилотного прогона check — сам doctor ничего не сравнивает, ему неоткуда
-/// взять реальный размер эффекта.
+/// A conservative size for a "typical" real leak from an unsafe
+/// comparison — not artificially amplified, but the kind of gap that
+/// `==` instead of a constant-time comparison actually produces in real
+/// compiled code: single-digit microseconds. Only used to give a
+/// meaningful sample-count recommendation BEFORE we have a real effect
+/// size from check's pilot run — doctor itself doesn't compare anything,
+/// it has no real effect size to draw on.
 const TYPICAL_LEAK_SECONDS: f64 = 1e-6;
 
 pub struct DoctorReport {
@@ -39,9 +40,10 @@ impl JitterLevel {
     }
 }
 
-/// Грубая классификация джиттера. Пороги подобраны по практике: до 1мс —
-/// локальная сеть/loopback, единицы миллисекунд — тот же датацентр или
-/// хороший LAN, десятки миллисекунд — типичный публичный интернет.
+/// Rough jitter classification. Thresholds picked from practice: under 1ms
+/// is local network/loopback, single-digit milliseconds is same
+/// datacenter or a good LAN, tens of milliseconds is typical public
+/// internet.
 fn classify_jitter(jitter_seconds: f64) -> JitterLevel {
     if jitter_seconds < 0.001 {
         JitterLevel::Low
@@ -87,10 +89,10 @@ impl DoctorReport {
             percentile(&sorted, 50.0)
         };
 
-        // используем ту же (теперь робастную к выбросам, MAD-based) оценку
-        // джиттера, что и основной pipeline check — раньше здесь был
-        // отдельный расчёт через дисперсию, который расходился с check
-        // на реальных данных из-за чувствительности к единичным выбросам
+        // use the same (now outlier-robust, MAD-based) jitter estimate as
+        // the main check pipeline — this used to be a separate
+        // variance-based calculation that diverged from check on real
+        // data due to sensitivity to single outliers
         let jitter_seconds = estimate_jitter(latencies);
 
         let recommended_samples = if jitter_seconds > 0.0 {

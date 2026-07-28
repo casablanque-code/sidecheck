@@ -1,19 +1,20 @@
-//! Статистическое ядро sidecheck.
+//! Statistical core of sidecheck.
 //!
-//! Методология основана на Crosby, Wallach, Riedi, "Opportunities and Limits
-//! of Remote Timing Attacks" (ACM TISSEC, 2009): сеть может только добавлять
-//! задержку, никогда не убирать её, поэтому нижние перцентили выборки несут
-//! значительно меньше шума, чем среднее или даже минимум по сырым данным.
-//! На этом строится "box test" — сравнение низких перцентилей двух выборок.
+//! Methodology based on Crosby, Wallach, Riedi, "Opportunities and Limits
+//! of Remote Timing Attacks" (ACM TISSEC, 2009): the network can only add
+//! delay, never remove it, so the low percentiles of a sample carry far
+//! less noise than the mean or even the raw minimum. This is what the
+//! "box test" builds on — comparing the low percentiles of two samples.
 
-/// Число итераций bootstrap resampling для доверительного интервала.
-/// Вынесено в константу, чтобы её можно было честно указать в отчёте —
-/// не просто "confidence: 95%", а явно "bootstrap confidence на N итерациях".
+/// Number of bootstrap resampling iterations for the confidence interval.
+/// Pulled out into a constant so it can be reported honestly — not just
+/// "confidence: 95%", but explicitly "bootstrap confidence over N
+/// iterations".
 pub const BOOTSTRAP_ITERATIONS: usize = 2000;
 
 use rand::Rng;
 
-/// Возвращает значение p-го перцентиля отсортированной выборки (p в [0.0, 100.0]).
+/// Returns the p-th percentile of a sorted sample (p in [0.0, 100.0]).
 pub fn percentile(sorted: &[f64], p: f64) -> f64 {
     assert!(!sorted.is_empty(), "empty sample");
     let idx = (p / 100.0 * (sorted.len() - 1) as f64).round() as usize;
@@ -26,14 +27,14 @@ fn sorted_copy(data: &[f64]) -> Vec<f64> {
     v
 }
 
-/// Результат box test: разница между низкими перцентилями двух выборок
-/// плюс доверительный интервал, полученный бутстрэпом (без предположений
-/// о нормальности распределения сетевых задержек).
+/// Result of a box test: the difference between the low percentiles of two
+/// samples, plus a confidence interval obtained via bootstrap (no
+/// assumption of normally-distributed network latency).
 #[derive(Debug, Clone)]
 pub struct BoxTestResult {
     pub class_a_low_percentile: f64,
     pub class_b_low_percentile: f64,
-    /// class_b - class_a, в тех же единицах, что и входные данные (секунды)
+    /// class_b - class_a, in the same units as the input data (seconds)
     pub estimated_leak: f64,
     pub ci_low: f64,
     pub ci_high: f64,
@@ -41,16 +42,16 @@ pub struct BoxTestResult {
 }
 
 impl BoxTestResult {
-    /// Утечка считается статистически значимой, если доверительный интервал
-    /// разницы не содержит нуля.
+    /// The leak is considered statistically significant if the confidence
+    /// interval of the difference does not contain zero.
     pub fn is_significant(&self) -> bool {
         self.ci_low > 0.0 || self.ci_high < 0.0
     }
 }
 
-/// Box test по методологии Crosby-Wallach: сравнивает низкий перцентиль
-/// (по умолчанию p10) двух выборок времени отклика, доверительный интервал
-/// строится через bootstrap resampling.
+/// Box test per the Crosby-Wallach methodology: compares the low
+/// percentile (p10 by default) of two response-time samples; the
+/// confidence interval is built via bootstrap resampling.
 pub fn box_test(
     class_a: &[f64],
     class_b: &[f64],
@@ -82,9 +83,9 @@ pub fn box_test(
     }
 }
 
-/// Bootstrap-доверительный интервал для разницы низких перцентилей.
-/// Не полагается на нормальность — пересэмплирует исходные данные с
-/// возвращением и считает эмпирическое распределение разницы.
+/// Bootstrap confidence interval for the difference between low
+/// percentiles. Doesn't rely on normality — resamples the raw data with
+/// replacement and builds the empirical distribution of the difference.
 fn bootstrap_ci(
     class_a: &[f64],
     class_b: &[f64],
@@ -116,18 +117,19 @@ fn resample(data: &[f64], rng: &mut impl Rng) -> Vec<f64> {
         .collect()
 }
 
-/// Оценка джиттера сети по пилотной выборке. Раньше считалась как
-/// стандартное отклонение вокруг низкого перцентиля — но дисперсия
-/// (квадраты отклонений) крайне чувствительна к единичным выбросам
-/// (первый запрос после установки соединения, GC-пауза, шедулинг ОС):
-/// один медленный запрос из трёхсот мог задрать оценку в разы, из-за чего
-/// два независимых замера одного и того же канала расходились в разы.
+/// Estimates network jitter from a pilot sample. Used to be computed as
+/// the standard deviation around the low percentile — but variance
+/// (squared deviations) is extremely sensitive to single outliers (the
+/// first request after connection setup, a GC pause, OS scheduling): one
+/// slow request out of three hundred could inflate the estimate several
+/// times over, which is why two independent measurements of the same
+/// channel could disagree wildly.
 ///
-/// MAD (median absolute deviation — медиана абсолютных отклонений от
-/// медианы) почти нечувствительна к единичным выбросам: чтобы сдвинуть
-/// медиану, нужно испортить больше половины выборки, а не один запрос.
-/// Множитель 1.4826 — стандартный коэффициент, делающий MAD согласованной
-/// оценкой стандартного отклонения для нормально распределённых данных.
+/// MAD (median absolute deviation from the median) is nearly insensitive
+/// to single outliers: shifting the median requires corrupting more than
+/// half the sample, not one request. The 1.4826 multiplier is the
+/// standard factor that makes MAD a consistent estimator of standard
+/// deviation for normally distributed data.
 pub fn estimate_jitter(pilot: &[f64]) -> f64 {
     if pilot.is_empty() {
         return 0.0;
@@ -140,25 +142,25 @@ pub fn estimate_jitter(pilot: &[f64]) -> f64 {
     mad * 1.4826
 }
 
-/// Оценка минимального числа запросов на класс, необходимого для
-/// обнаружения утечки заданного размера при данном уровне шума сети.
-/// Формула из мощностного анализа (power analysis) для сравнения средних:
+/// Estimates the minimum number of requests per class needed to detect a
+/// leak of the given size at the given network noise level. Formula from
+/// power analysis for comparing means:
 /// n ≈ 2 * (z_alpha/2 + z_beta)^2 * sigma^2 / delta^2
 pub fn required_samples(jitter: f64, expected_leak_seconds: f64, confidence: f64) -> u64 {
     if expected_leak_seconds <= 0.0 {
         return u64::MAX;
     }
-    // z-значения для двустороннего теста с confidence и мощностью 80% (z_beta ≈ 0.84)
+    // z-values for a two-sided test at `confidence` with 80% power (z_beta ≈ 0.84)
     let z_alpha = inverse_normal_cdf(1.0 - (1.0 - confidence) / 2.0);
     let z_beta = 0.84;
     let n = 2.0 * (z_alpha + z_beta).powi(2) * jitter.powi(2) / expected_leak_seconds.powi(2);
     n.ceil() as u64
 }
 
-/// Приближение обратной функции нормального распределения (Beasley-Springer-Moro).
-/// Достаточно точное для оценки необходимого объёма выборки.
+/// Approximation of the inverse normal CDF (Beasley-Springer-Moro).
+/// Accurate enough for estimating the required sample size.
 fn inverse_normal_cdf(p: f64) -> f64 {
-    // Rational approximation, максимальная погрешность ~1.15e-9
+    // Rational approximation, maximum error ~1.15e-9
     let a = [
         -3.969683028665376e+01,
         2.209460984245205e+02,
@@ -221,22 +223,23 @@ mod tests {
 
     #[test]
     fn jitter_estimate_is_robust_to_a_single_outlier() {
-        // Регрессия на реальный найденный баг: два независимых замера одного
-        // и того же стабильного канала (doctor vs check pilot) разошлись в
-        // 5 раз, потому что старая (дисперсионная) оценка джиттера была
-        // непропорционально чувствительна к одному медленному запросу
-        // (например, первому после установки TCP-соединения).
+        // Regression for a real bug found in the wild: two independent
+        // measurements of the same stable channel (doctor vs check pilot)
+        // disagreed by 5x, because the old (variance-based) jitter
+        // estimate was disproportionately sensitive to a single slow
+        // request (e.g. the first one after TCP connection setup).
         let mut stable: Vec<f64> = (0..300)
             .map(|i| 0.0002 + (i as f64 % 5.0) * 0.00001)
             .collect();
         let jitter_without_outlier = estimate_jitter(&stable);
 
-        // один-единственный запрос вдруг занял 50ms вместо ~0.2ms
+        // a single request suddenly took 50ms instead of ~0.2ms
         stable[0] = 0.050;
         let jitter_with_outlier = estimate_jitter(&stable);
 
-        // MAD не должна взлетать в разы от одного выброса на 300 сэмплов —
-        // старая дисперсионная реализация здесь давала рост в десятки раз
+        // MAD should not spike several times over from one outlier out of
+        // 300 samples — the old variance-based implementation blew up by
+        // tens of times here
         assert!(
             jitter_with_outlier < jitter_without_outlier * 3.0,
             "a single outlier out of 300 samples should not blow up the jitter \

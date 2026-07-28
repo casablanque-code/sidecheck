@@ -1,27 +1,27 @@
-//! Сбор сырых измерений времени отклика.
+//! Collects raw response-time measurements.
 //!
-//! Ключевое требование методологии: классы запросов (например, "верный
-//! префикс" / "неверный префикс") должны чередоваться в случайном порядке,
-//! а не идти блоками "сначала все A, потом все B" — иначе на результат
-//! повлияет прогрев сервера, фоновая нагрузка или дрейф сети во времени,
-//! а не сама утечка. См. dudect / Crosby-Wallach методологию.
+//! Key methodology requirement: request classes (e.g. "correct prefix" /
+//! "wrong prefix") must be interleaved in random order, not sent block by
+//! block ("all A, then all B") — otherwise server warm-up, background
+//! load, or network drift over time bias the result, not the leak itself.
+//! See the dudect / Crosby-Wallach methodology.
 
 use anyhow::{Context, Result};
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::time::Instant;
 
-/// Куда подставляется тестовое значение. Header — самый частый случай для
-/// API-ключей, Query — для legacy-эндпоинтов с токеном в URL, JsonBody —
-/// для типичных JSON-логинов (POST /login {"password": "..."}).
+/// Where the test value gets injected. Header is the most common case for
+/// API keys, Query for legacy endpoints with a token in the URL, JsonBody
+/// for typical JSON logins (POST /login {"password": "..."}).
 #[derive(Clone, Debug)]
 pub enum InjectionPoint {
     Header(String),
     Query(String),
-    /// Имя поля в JSON-объекте тела запроса, плюс опциональный шаблон
-    /// остальных полей (например {"username": "admin"}), которые бэкенду
-    /// нужны, чтобы вообще дойти до сравнения секрета. Если шаблон не
-    /// задан — тело как раньше состоит из одного этого поля.
+    /// Name of the field in the JSON request body, plus an optional
+    /// template for the rest of the fields (e.g. {"username": "admin"})
+    /// the backend needs to even reach the secret comparison. If no
+    /// template is given, the body is just this one field, as before.
     JsonBody {
         field: String,
         template: Option<serde_json::Map<String, serde_json::Value>>,
@@ -41,7 +41,7 @@ impl InjectionPoint {
     }
 }
 
-/// HTTP-цель: URL и точка, в которую подставляется тестовое значение.
+/// HTTP target: the URL plus the point where the test value gets injected.
 pub struct HttpTarget {
     client: reqwest::blocking::Client,
     url: String,
@@ -60,8 +60,8 @@ impl HttpTarget {
     ) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
-            // важно: не подтягивать TCP keep-alive пул иначе первый запрос
-            // в каждом классе будет медленнее из-за установки соединения
+            // important: keep the TCP keep-alive pool small, otherwise the
+            // first request in each class is slower due to connection setup
             .pool_max_idle_per_host(4)
             .danger_accept_invalid_certs(accept_invalid_certs)
             .build()
@@ -73,8 +73,9 @@ impl HttpTarget {
         })
     }
 
-    /// Один замер: отправляет запрос с заданным значением в настроенной
-    /// точке инъекции, возвращает время до получения полного ответа в секундах.
+    /// One measurement: sends a request with the given value at the
+    /// configured injection point, returns the time to receive the full
+    /// response, in seconds.
     pub fn measure(&self, value: &str) -> Result<f64> {
         let start = Instant::now();
 
@@ -100,16 +101,18 @@ impl HttpTarget {
         }
         .context("request failed")?;
 
-        // важно дочитать тело — иначе замер не включает полное время ответа
+        // important to read the body fully — otherwise the measurement
+        // doesn't include the full response time
         let _ = resp.bytes().context("failed to read response body")?;
         Ok(start.elapsed().as_secs_f64())
     }
 }
 
-/// Генерирует заведомо неверное значение той же длины, что и реальный
-/// секрет — чтобы длина payload не была отдельной переменной, искажающей
-/// измерение (см. предупреждение в CLI про разную длину value_a/value_b).
-/// Принимает внешний RNG, чтобы весь прогон был воспроизводим по одному seed.
+/// Generates a deliberately wrong value of the same length as the real
+/// secret — so payload length isn't a separate variable skewing the
+/// measurement (see the CLI warning about mismatched value_a/value_b
+/// length). Takes an external RNG so the whole run is reproducible from
+/// one seed.
 pub fn random_wrong_value(secret: &str, rng: &mut impl Rng) -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     loop {
@@ -126,17 +129,17 @@ pub fn random_wrong_value(secret: &str, rng: &mut impl Rng) -> String {
 pub struct RawSamples {
     pub class_a: Vec<f64>,
     pub class_b: Vec<f64>,
-    /// число запросов, которые не удалось выполнить (таймаут, разрыв
-    /// соединения и т.п.) — не считаются в статистике, но если их много,
-    /// результату нельзя доверять
+    /// number of requests that couldn't be completed (timeout, connection
+    /// reset, etc.) — not counted in the statistics, but if there are many
+    /// of them, the result can't be trusted
     pub failures: usize,
 }
 
-/// Прогоняет n_per_class измерений на каждый класс, чередуя их случайными
-/// блоками, чтобы усреднить влияние дрейфа во времени. Одиночные сбои сети
-/// не прерывают весь прогон — считаются и репортятся отдельно, но если
-/// доля сбоев превышает max_failure_ratio, прогон останавливается: на таком
-/// нестабильном канале доверять таймингам нельзя.
+/// Runs n_per_class measurements for each class, interleaving them in
+/// random blocks to average out drift over time. Isolated network
+/// failures don't abort the whole run — they're counted and reported
+/// separately, but if the failure ratio exceeds max_failure_ratio, the run
+/// stops: timings can't be trusted over such an unstable channel.
 pub fn run_interleaved(
     target: &HttpTarget,
     value_a: &str,
@@ -201,17 +204,19 @@ pub fn run_interleaved(
     Ok(result)
 }
 
-/// Результат простого сбора замеров для `sidecheck doctor` — без деления
-/// на классы, нас интересует только форма распределения RTT до цели.
+/// Result of a plain measurement pass for `sidecheck doctor` — no class
+/// split, we only care about the shape of the RTT distribution to the
+/// target.
 #[derive(Debug, Default)]
 pub struct PlainSamples {
     pub latencies: Vec<f64>,
     pub failures: usize,
 }
 
-/// Собирает n последовательных замеров одного и того же запроса. В отличие
-/// от run_interleaved — не прерывается на потерях пакетов, а считает их: для
-/// doctor-режима сам процент потерь и есть часть диагноза, а не повод остановиться.
+/// Collects n consecutive measurements of the same request. Unlike
+/// run_interleaved, it doesn't abort on packet loss — it just counts it:
+/// in doctor mode, the loss rate itself is part of the diagnosis, not a
+/// reason to stop.
 pub fn collect_plain(
     target: &HttpTarget,
     value: &str,

@@ -1,35 +1,43 @@
 # Changelog
 
-Формат по [Keep a Changelog](https://keepachangelog.com/), версии по [SemVer](https://semver.org/).
+Format based on [Keep a Changelog](https://keepachangelog.com/), versions per [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.2.0] — TBD
-
-### Added
-- `--json-body` — шаблон тела запроса для `--json-field`, чтобы можно было задать остальные обязательные поля (username, email и т.д.), которые бэкенду нужны, чтобы дойти до сравнения секрета
-- `rust-version` (MSRV) в Cargo.toml + отдельный CI-джоб, собирающий workspace на заявленном MSRV, чтобы регресс по этой границе ловился в CI, а не у пользователя при `cargo install`
-- Автоматизация релиза: `Prepare Release` (ручной триггер, бампает версию/тег) → `Release` (публикует sidecheck-core и sidecheck на crates.io идемпотентно, собирает бинарники под linux/macos/windows, создаёт GitHub Release)
+## [0.2.1] — 2026-07-27
 
 ### Fixed
-- README: команда `cargo install` теперь с `--locked`, чтобы использовать закоммиченный Cargo.lock вместо повторного резолва зависимостей — обходит `feature edition2024 is required` на более старых системных toolchain (например Ubuntu 24.04 LTS, cargo 1.75)
+- `--json-body` without `--json-field` was silently ignored instead of rejected — clap's `requires` attribute doesn't fire reliably when the target arg is also a member of an `ArgGroup`. Replaced with an explicit manual check and a clear error message.
+- `sidecheck-cli` was missing a direct `serde_json` dependency (it only had it transitively via `sidecheck-core`) — broke `cargo build`/`clippy` for anyone building from a fresh checkout.
+- Release automation: the tag pushed by `Prepare Release` didn't trigger `Release`, because GitHub deliberately excludes `GITHUB_TOKEN`-authored pushes from triggering other workflows. `Prepare Release` now checks out with a `RELEASE_PAT` secret so the tag push counts as external; `Release` also gained a `workflow_dispatch` fallback so a stuck tag can be resumed without re-tagging.
+- `softprops/action-gh-release` needs an explicit `tag_name` on `workflow_dispatch` runs, since `GITHUB_REF` points at the branch, not the tag, in that case.
+
+## [0.2.0] — 2026-07-27
+
+### Added
+- `--json-body` — a request body template for `--json-field`, so the rest of the required fields (username, email, etc.) that the backend needs to reach the secret comparison can be supplied
+- `rust-version` (MSRV) in Cargo.toml + a dedicated CI job building the workspace at the declared MSRV, so a regression on that boundary is caught in CI instead of by a user running `cargo install`
+- Release automation: `Prepare Release` (manual trigger, bumps version/tag) → `Release` (publishes sidecheck-core and sidecheck to crates.io idempotently, builds linux/macos/windows binaries, creates a GitHub Release)
+
+### Fixed
+- README: the `cargo install` command now uses `--locked`, to use the committed Cargo.lock instead of re-resolving dependencies — works around `feature edition2024 is required` on older system toolchains (e.g. Ubuntu 24.04 LTS's packaged cargo 1.75)
 
 ### Changed
-- Уточнена формулировка `sidecheck doctor`: `recommended samples` — оценка по формуле power analysis для сравнения средних (прокси через MAD-джиттер), а не точный расчёт мощности box-test/бутстрапа; для reference-точки используется фиксированный condition ~1μs
+- Clarified the `sidecheck doctor` wording: `recommended samples` is a power-analysis estimate for comparing means (using MAD-based jitter as a proxy), not an exact box-test/bootstrap power calculation; a fixed ~1μs condition is used as the reference point
 
 ## [0.1.0] — retroactive, no formal GitHub release was cut at the time
 
-Первая рабочая версия. Добавлено задним числом в changelog по факту публикации sidecheck-core и sidecheck на crates.io.
+First working version. Added to the changelog after the fact, once sidecheck-core and sidecheck were published to crates.io.
 
 ### Added
-- `sidecheck check` — box test (Crosby–Wallach–Riedi) с бутстрап-доверительными интервалами по низкому перцентилю (p10 по умолчанию), рандомизированное чередование классов блоками, автоподбор числа сэмплов по пилотному прогону
-- Инъекция значения в header / query param / одно поле JSON body
-- Способы передачи секрета: `--secret`, `--secret-env`, `--secret-stdin` (с предупреждением о видимости в `ps aux`/истории для `--secret`)
-- `sidecheck doctor` — pre-flight проверка сети (median RTT, jitter, packet loss, рекомендованное число сэмплов, классификация окружения)
-- MAD-based (робастная к выбросам) оценка джиттера — заменила более раннюю дисперсионную оценку
-- `--repeat N` — повторные полные прогоны для проверки стабильности результата
-- Экспорт сырых данных в CSV и машиночитаемый JSON-отчёт (`--report`) для CI
-- `--seed` для воспроизводимости порядка чередования запросов
-- Guard от заведомо бессмысленного прогона: если по оценке джиттера мощности не хватит даже на `--max-samples`, sidecheck останавливается заранее (обход — `--force`)
-- E2E CI на реальном fixture-сервере (Python), unit-тесты статистики, cargo-audit, Dependabot
-- Документированное ограничение: утечка ~25 байт не обнаружима через публичный интернет (джиттер маскирует эффект)
+- `sidecheck check` — box test (Crosby–Wallach–Riedi) with bootstrap confidence intervals on the low percentile (p10 by default), randomized block interleaving of classes, automatic sample-count selection from a pilot run
+- Value injection into a header / query param / a single JSON body field
+- Ways to supply the secret: `--secret`, `--secret-env`, `--secret-stdin` (with a warning about `--secret` being visible in `ps aux`/history)
+- `sidecheck doctor` — pre-flight network check (median RTT, jitter, packet loss, recommended sample count, environment classification)
+- MAD-based (outlier-robust) jitter estimate — replaced an earlier variance-based one
+- `--repeat N` — repeated full runs to check result stability
+- Raw data export to CSV and a machine-readable JSON report (`--report`) for CI
+- `--seed` for reproducible request interleaving order
+- A guard against a run that's doomed from the start: if the jitter estimate says even `--max-samples` won't have enough power, sidecheck stops early (override with `--force`)
+- E2E CI against a real fixture server (Python), unit tests for the statistics, cargo-audit, Dependabot
+- Documented limitation: a ~25-byte leak isn't detectable over the public internet (jitter masks the effect)

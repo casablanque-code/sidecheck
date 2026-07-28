@@ -1,12 +1,12 @@
-// Реалистичный полигон #2: Go, стандартная библиотека, ноль зависимостей.
-// В отличие от test_fixture.py — здесь НЕТ искусственной задержки на
-// совпавший байт. /vulnerable использует обычное go `==` на строках,
-// как оно реально пишется в проде (и как его пишет Copilot/Claude, если
-// не попросить явно про constant-time). Утечка здесь — это то, что
-// действительно происходит на уровне CPU/памяти, не усиленная демонстрация.
+// Realistic fixture #2: Go, standard library, zero dependencies. Unlike
+// test_fixture.py, there's NO artificial delay per matched byte.
+// /vulnerable uses a plain Go `==` on strings, the way it's actually
+// written in production (and the way Copilot/Claude write it unless
+// explicitly asked for constant-time). The leak here is whatever
+// actually happens at the CPU/memory level, not an amplified demo.
 //
-// Запуск:   go run main.go
-// Секрет:   "correct-secret-key-123456"
+// Run:    go run main.go
+// Secret: "correct-secret-key-123456"
 package main
 
 import (
@@ -18,10 +18,10 @@ import (
 	"strconv"
 )
 
-// Длина секрета настраивается через SECRET_LEN (по умолчанию 25 — как в
-// исходном полигоне). Секрет строится детерминированно из повторяющегося
-// паттерна, чтобы результат был воспроизводим между запусками при одной
-// и той же длине.
+// Secret length is configurable via SECRET_LEN (25 by default, as in the
+// original fixture). The secret is built deterministically from a
+// repeating pattern, so the result is reproducible across runs at the
+// same length.
 func buildSecret(length int) string {
 	const pattern = "correct-secret-key-123456"
 	b := make([]byte, length)
@@ -44,10 +44,10 @@ var secret = buildSecret(secretLength())
 
 func vulnerableHandler(w http.ResponseWriter, r *http.Request) {
 	candidate := r.Header.Get("X-API-Key")
-	// именно так это пишут в реальном коде: обычное сравнение строк.
-	// go's == на строках сравнивает длину, затем байты по порядку и
-	// останавливается на первом несовпадении — то самое поведение,
-	// которое мы ищем, без каких-либо усилений с нашей стороны.
+	// exactly how this gets written in real code: a plain string
+	// comparison. Go's == on strings compares length, then bytes in
+	// order, and stops at the first mismatch — the exact behavior we're
+	// looking for, with no amplification on our side.
 	if candidate == secret {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")

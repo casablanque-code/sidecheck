@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
 """
-Контрольный полигон для sidecheck.
+Control fixture for sidecheck.
 
-/vulnerable — сравнение вручную, посимвольно, с искусственной задержкой на
-              каждый совпавший байт префикса (усиливает сигнал, чтобы его
-              было легко поймать даже через loopback — в реальности утечка
-              обычно в наносекундах, здесь она увеличена намеренно, чтобы
-              проверить, что sidecheck вообще способен её обнаружить).
-/safe        — то же самое, но через hmac.compare_digest (настоящий
-              constant-time). sidecheck не должен здесь ничего найти.
+/vulnerable — a manual, character-by-character comparison with an
+              artificial delay per matched prefix byte (amplifies the
+              signal so it's easy to catch even over loopback — in
+              reality the leak is usually nanoseconds; here it's
+              deliberately amplified to check that sidecheck can detect
+              it at all).
+/safe        — the same thing, but via hmac.compare_digest (real
+              constant-time). sidecheck should find nothing here.
 
-Запуск: python3 test_fixture.py
-Затем:  sidecheck check http://127.0.0.1:8000/vulnerable \
+Run: python3 test_fixture.py
+Then:  sidecheck check http://127.0.0.1:8000/vulnerable \
           --header X-API-Key --secret "correct-secret-key-123456" \
           --samples 3000
 
-Безопасный эндпоинт для контроля (не должен ничего найти):
+Safe endpoint as a control (should find nothing):
         sidecheck check http://127.0.0.1:8000/safe \
           --header X-API-Key --secret "correct-secret-key-123456" \
           --samples 3000
 
-Секрет: "correct-secret-key-123456"
+Secret: "correct-secret-key-123456"
 """
 
 import hmac
@@ -28,14 +29,14 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SECRET = "correct-secret-key-123456"
-DELAY_PER_MATCHED_BYTE = 0.0004  # 400us на совпавший байт — усиленный сигнал для демо
+DELAY_PER_MATCHED_BYTE = 0.0004  # 400us per matched byte — amplified signal for the demo
 
 
 def vulnerable_compare(candidate: str) -> bool:
     for i, ch in enumerate(candidate):
         if i >= len(SECRET) or ch != SECRET[i]:
             return False
-        time.sleep(DELAY_PER_MATCHED_BYTE)  # искусственная утечка
+        time.sleep(DELAY_PER_MATCHED_BYTE)  # artificial leak
     return len(candidate) == len(SECRET)
 
 
@@ -45,7 +46,7 @@ def safe_compare(candidate: str) -> bool:
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
-        pass  # тихий сервер, не засоряем вывод
+        pass  # quiet server, don't clutter the output
 
     def do_GET(self):
         candidate = self.headers.get("X-API-Key", "")

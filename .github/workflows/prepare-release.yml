@@ -1,24 +1,24 @@
 name: Prepare Release
 
-# Единственный шаг с человеком в цикле: Actions → Prepare Release →
-# Run workflow → ввести версию. Дальше всё автоматически:
-#   1. version в [workspace.package] корневого Cargo.toml бампается —
-#      единственное место во всём workspace; sidecheck-core и sidecheck
-#      (CLI) читают его через version.workspace = true, так что оба
-#      крейта всегда идут в паре, версия в версию.
-#   2. коммит "chore(release): vX.Y.Z"
-#   3. тег vX.Y.Z, пуш коммита и тега
-#   4. пуш тега триггерит .github/workflows/release.yml — тот уже сам
-#      публикует оба крейта на crates.io (идемпотентно) и собирает
-#      GitHub Release с бинарниками
+# The one step with a human in the loop: Actions → Prepare Release →
+# Run workflow → enter the version. Everything after that is automatic:
+#   1. version in the root Cargo.toml's [workspace.package] gets bumped —
+#      the single place in the whole workspace; sidecheck-core and
+#      sidecheck (CLI) read it via version.workspace = true, so both
+#      crates always move version-for-version together.
+#   2. commit "chore(release): vX.Y.Z"
+#   3. tag vX.Y.Z, push the commit and the tag
+#   4. the tag push triggers .github/workflows/release.yml — which
+#      publishes both crates to crates.io (idempotently) and builds a
+#      GitHub Release with binaries
 #
-# Больше никогда не редактировать .toml руками ради релиза sidecheck.
+# Never edit the .toml by hand for a sidecheck release again.
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Новая версия, semver без 'v' (например 0.2.0)"
+        description: "New version, semver without a leading 'v' (e.g. 0.2.0)"
         required: true
 
 permissions:
@@ -43,14 +43,14 @@ jobs:
         run: |
           v="${{ github.event.inputs.version }}"
           echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
-            echo "Версия должна быть X.Y.Z без 'v' и суффиксов, получено: '$v'";
+            echo "Version must be X.Y.Z with no leading 'v' or suffix, got: '$v'";
             exit 1;
           }
 
       - name: Check tag doesn't already exist
         run: |
           if git rev-parse "v${{ github.event.inputs.version }}" >/dev/null 2>&1; then
-            echo "Тег v${{ github.event.inputs.version }} уже существует";
+            echo "Tag v${{ github.event.inputs.version }} already exists";
             exit 1;
           fi
 

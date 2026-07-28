@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 """
-Фикстура для проверки --json-body (0.2.0): реалистичный /login,
-которому кроме пароля нужен ещё username, чтобы вообще дойти до
-сравнения секрета — ровно тот случай, который --json-field без
---json-body не мог покрыть.
+Fixture for exercising --json-body (0.2.0): a realistic /login that
+needs a username besides the password to even reach the secret
+comparison — exactly the case --json-field without --json-body
+couldn't cover.
 
-/vulnerable — сравнение вручную посимвольно, с усиленной задержкой
-              (как в test-fixture/test_fixture.py) — сигнал искусственно
-              увеличен, чтобы его было легко поймать через loopback.
-/safe        — hmac.compare_digest, sidecheck не должен здесь ничего найти.
+/vulnerable — a manual character-by-character comparison, with an
+              amplified delay (like test-fixture/test_fixture.py) —
+              the signal is artificially amplified so it's easy to
+              catch over loopback.
+/safe        — hmac.compare_digest, sidecheck should find nothing here.
 
-Неверный username -> всегда 401 без сравнения пароля (реалистичный ранний
-выход) — если --json-body не передать, sidecheck будет слать только
-{"password": "..."} без username и получит 401 на каждый запрос, то есть
-не увидит вообще никакого сигнала (ни утечки, ни разницы между classes) —
-это тоже полезно проверить как негативный кейс.
+Wrong username -> always 401 without comparing the password (a
+realistic early exit) — if --json-body isn't passed, sidecheck will
+only send {"password": "..."} with no username and get a 401 on
+every request, i.e. it won't see any signal at all (neither a leak
+nor a difference between classes) — useful to check as a negative
+case too.
 
-Запуск: python3 json_login_fixture.py
-Логин: "admin", пароль: "correct-secret-key-123456"
+Run: python3 json_login_fixture.py
+Login: "admin", password: "correct-secret-key-123456"
 """
 
 import hmac
@@ -58,7 +60,7 @@ class Handler(BaseHTTPRequestHandler):
         password = body.get("password", "")
 
         if username != USERNAME:
-            # ранний выход до сравнения пароля вообще — реалистично
+            # early exit before comparing the password at all — realistic
             self.send_response(401)
             self.end_headers()
             self.wfile.write(b"denied")

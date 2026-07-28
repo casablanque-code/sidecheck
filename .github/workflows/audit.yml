@@ -11,9 +11,9 @@ on:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
   schedule:
-    # раз в неделю — новые RustSec-советы появляются и без изменений в
-    # наших зависимостях, security-инструмент не может позволить себе
-    # узнавать об этом только по коммитам
+    # weekly — new RustSec advisories show up even without any changes to
+    # our dependencies; a security tool can't afford to only learn about
+    # them from commits
     - cron: "0 6 * * 1"
 
 jobs:

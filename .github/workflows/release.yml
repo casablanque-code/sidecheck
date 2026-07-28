@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Тег для ручного релиза, например v0.2.1 (на случай если push тега не триггернул этот workflow автоматически)"
+        description: "Tag for a manual release, e.g. v0.2.1 (in case the tag push didn't trigger this workflow automatically)"
         required: true
 
 permissions:
@@ -15,14 +15,16 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # workflow_dispatch чекаутит ветку по умолчанию, не тег — этим резолвим
-  # правильный ref для всех джобов независимо от способа запуска.
+  # workflow_dispatch checks out the branch by default, not the tag —
+  # this resolves the right ref for every job regardless of how the
+  # workflow was triggered.
   RELEASE_REF: ${{ github.event.inputs.tag || github.ref }}
 
 jobs:
-  # Ловит рассогласование тега и Cargo.toml ДО сборки (см. netconv:
-  # ручной `git tag` в обход Prepare Release однажды разошёлся с
-  # версией в манифесте, и бинарник печатал не тот --version).
+  # Catches a mismatch between the tag and Cargo.toml BEFORE building (a
+  # manual `git tag` that bypasses Prepare Release could drift from the
+  # version in the manifest, and the binary would then print the wrong
+  # --version).
   check-version:
     name: check tag matches Cargo.toml version
     runs-on: ubuntu-latest
@@ -42,11 +44,11 @@ jobs:
             exit 1
           fi
 
-  # sidecheck-core и sidecheck (CLI) делят одну workspace-версию, но
-  # публикуются на crates.io отдельными cargo publish -p — поэтому
-  # каждый шаг идемпотентный: проверяет sparse index и пропускает уже
-  # опубликованную версию, а не падает. Порядок важен — CLI зависит от
-  # core, core публикуется первым.
+  # sidecheck-core and sidecheck (CLI) share one workspace version, but
+  # are published to crates.io as separate `cargo publish -p` steps — so
+  # each step is idempotent: it checks the sparse index and skips a
+  # version that's already published instead of failing. Order matters —
+  # the CLI depends on core, so core is published first.
   publish-crates:
     name: publish to crates.io
     needs: check-version

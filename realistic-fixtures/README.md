@@ -57,6 +57,24 @@ than the original 25-byte one. Try a few points (100 / 500 / 2000 / 10000
 bytes) with `doctor` first to check the channel is still `GOOD`, then
 `check`, and see where the CI stops including zero.
 
+## json_login_fixture.py
+
+Pure Python, no dependencies. Exercises `--json-body` (0.2.0): a realistic
+`/login` that needs a `username` besides the password to even reach the
+secret comparison — the case `--json-field` alone can't cover, since it
+only ever sends `{"password": "..."}`.
+
+```sh
+python3 json_login_fixture.py
+# serves on http://127.0.0.1:8003
+#   /vulnerable — manual character-by-character comparison, amplified delay
+#   /safe       — hmac.compare_digest
+
+sidecheck check http://127.0.0.1:8003/vulnerable \
+  --json-field password --json-body '{"username": "admin"}' \
+  --secret correct-secret-key-123456
+```
+
 ## Running the default (25-byte) fixtures
 
 Secret for both: `correct-secret-key-123456`

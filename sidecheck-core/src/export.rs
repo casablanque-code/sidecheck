@@ -1,5 +1,5 @@
-//! Экспорт результатов — CSV с сырыми измерениями (для независимой
-//! перепроверки статистики кем угодно) и JSON-отчёт (для CI/автоматизации).
+//! Result export — CSV with raw measurements (for anyone to independently
+//! re-check the statistics) and a JSON report (for CI/automation).
 
 use crate::report::DetectionReport;
 use crate::sampler::RawSamples;
@@ -25,9 +25,10 @@ pub fn write_csv(path: &Path, raw: &RawSamples) -> Result<()> {
     Ok(())
 }
 
-/// Машиночитаемый отчёт для CI/автоматизации/приложения к bug bounty.
-/// Всегда несёт версию sidecheck и seed — через год алгоритм статистики
-/// может измениться, и без версии старый отчёт станет непонятно, чему верить.
+/// Machine-readable report for CI/automation/bug bounty attachments.
+/// Always carries the sidecheck version and seed — a year from now the
+/// statistics algorithm may have changed, and without a version an old
+/// report becomes unclear about what to trust.
 #[derive(Serialize)]
 pub struct JsonReport {
     pub target: String,

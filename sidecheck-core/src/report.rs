@@ -1,5 +1,5 @@
-//! Перевод статистики в понятный человеку вердикт.
-//! Никаких сырых t-значений наружу — только то, что нужно для решения.
+//! Turns the statistics into a human-readable verdict.
+//! No raw t-values exposed — only what's needed to make a decision.
 
 use crate::stats::BoxTestResult;
 
@@ -14,8 +14,8 @@ pub struct DetectionReport {
     pub sidecheck_version: String,
 }
 
-/// Автоматически выбирает единицу измерения (ns/μs/ms/s), чтобы не выводить
-/// "16264.9 μs" там, где человеку читается проще "16.3 ms".
+/// Automatically picks the display unit (ns/μs/ms/s) so we don't print
+/// "16264.9 μs" where "16.3 ms" reads easier for a human.
 fn format_duration(seconds: f64) -> String {
     let abs = seconds.abs();
     if abs >= 1.0 {
@@ -56,10 +56,11 @@ impl DetectionReport {
                 "  estimated leak         {}\n",
                 format_duration(self.result.estimated_leak.abs())
             ));
-            // "confidence" сама по себе неоднозначна — может читаться как
-            // "вероятность, что сервер уязвим". Уточняем явно, что это
-            // bootstrap-доверительный интервал разницы, а не вероятность
-            // уязвимости и не p-value.
+            // "confidence" on its own is ambiguous — it can read as "the
+            // probability that the server is vulnerable". Spell out
+            // explicitly that this is the bootstrap confidence interval of
+            // the difference, not a probability of vulnerability and not a
+            // p-value.
             out.push_str(&format!(
                 "  bootstrap confidence   {:.1}% (of the measured difference being non-zero)\n",
                 self.result.confidence * 100.0

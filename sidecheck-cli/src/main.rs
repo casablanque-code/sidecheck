@@ -24,14 +24,14 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
-// Commands парсится и матчится один раз при старте, не хранится в
-// коллекциях и не в горячем пути — разница в размере вариантов (Check
-// заметно больше Doctor) здесь не имеет практического значения. Боксинг
-// отдельных полей ради этого линта добавил бы косвенность без реальной
-// выгоды.
+// Commands is parsed and matched once at startup, not stored in
+// collections and not on the hot path — the size difference between
+// variants (Check is notably bigger than Doctor) has no practical impact
+// here. Boxing individual fields just to satisfy this lint would add
+// indirection with no real benefit.
 #[allow(clippy::large_enum_variant)]
 enum Commands {
-    /// Проверить HTTP-эндпоинт на timing side-channel
+    /// Check an HTTP endpoint for a timing side-channel
     #[command(group(
         ArgGroup::new("secret_mode")
             .required(true)
@@ -43,116 +43,121 @@ enum Commands {
             .args(["header", "query", "json_field"])
     ))]
     Check {
-        /// URL эндпоинта, например https://myapp.local/login
+        /// Endpoint URL, e.g. https://myapp.local/login
         url: String,
 
-        /// Подставлять значение в HTTP-заголовок с этим именем
+        /// Inject the value into this HTTP header
         #[arg(long, value_name = "NAME")]
         header: Option<String>,
-        /// Подставлять значение в query-параметр с этим именем (GET ?name=value)
+        /// Inject the value into this query parameter (GET ?name=value)
         #[arg(long, value_name = "NAME")]
         query: Option<String>,
-        /// Подставлять значение в поле JSON-тела POST-запроса
+        /// Inject the value into this field of the POST JSON body
         #[arg(long, value_name = "NAME")]
         json_field: Option<String>,
-        /// Шаблон остальных полей JSON-тела (нужен, только если эндпоинту
-        /// кроме --json-field требуются другие поля, чтобы дойти до
-        /// сравнения секрета), например:
+        /// Template for the rest of the JSON body fields (needed only if
+        /// the endpoint requires fields other than --json-field to reach
+        /// the secret comparison), e.g.:
         /// --json-body '{"username": "admin"}'
-        /// Поле из --json-field в шаблон подставлять не нужно — оно
-        /// добавляется/перезаписывается автоматически на каждом запросе.
-        /// Требует --json-field (проверяется вручную — clap's `requires`
-        /// не срабатывает надёжно в сочетании с ArgGroup здесь).
+        /// No need to include the --json-field field in the template — it
+        /// gets added/overwritten automatically on every request.
+        /// Requires --json-field (checked manually — clap's `requires`
+        /// doesn't fire reliably combined with an ArgGroup here).
         #[arg(long, value_name = "JSON")]
         json_body: Option<String>,
 
-        /// Простой режим: твой настоящий секрет прямо аргументом. Виден в
-        /// `ps aux` и попадёт в историю шелла — для чувствительных секретов
-        /// используй --secret-env или --secret-stdin.
+        /// Simple mode: your real secret directly as an argument. Visible
+        /// in `ps aux` and shell history — use --secret-env or
+        /// --secret-stdin for sensitive secrets.
         #[arg(long)]
         secret: Option<String>,
-        /// Читать секрет из переменной окружения с этим именем (не светится
-        /// в `ps aux`/истории шелла) — предпочтительный способ
+        /// Read the secret from this environment variable (doesn't show up
+        /// in `ps aux`/shell history) — the preferred way
         #[arg(long, value_name = "VAR")]
         secret_env: Option<String>,
-        /// Прочитать секрет из stdin (одна строка, без переноса) —
-        /// удобно для пайпа из password-менеджера: `pass show x | sidecheck ... --secret-stdin`
+        /// Read the secret from stdin (a single line, no trailing
+        /// newline) — handy for piping from a password manager:
+        /// `pass show x | sidecheck ... --secret-stdin`
         #[arg(long, default_value_t = false)]
         secret_stdin: bool,
 
-        /// Продвинутый режим: заведомо неверное значение (класс A)
+        /// Advanced mode: a deliberately wrong value (class A)
         #[arg(long, requires = "value_b")]
         value_a: Option<String>,
-        /// Продвинутый режим: значение с верным префиксом/полностью верное (класс B)
+        /// Advanced mode: a value with a correct prefix / fully correct
+        /// (class B)
         #[arg(long)]
         value_b: Option<String>,
 
-        /// Число измерений на класс. Если не указано — подбирается
-        /// автоматически по итогам пилотного прогона.
+        /// Number of measurements per class. If not given, it's picked
+        /// automatically from the pilot run.
         #[arg(long)]
         samples: Option<usize>,
-        /// Потолок для автоматически подобранного числа сэмплов
+        /// Ceiling for the automatically chosen sample count
         #[arg(long, default_value_t = 200_000)]
         max_samples: usize,
-        /// Размер пилотного забега для оценки джиттера сети
+        /// Pilot run size for estimating network jitter
         #[arg(long, default_value_t = 300)]
         pilot_samples: usize,
-        /// Размер блока при рандомизированном чередовании классов
+        /// Block size for randomized interleaving of classes
         #[arg(long, default_value_t = 20)]
         block_size: usize,
-        /// Уровень доверия для вывода (0.0-1.0)
+        /// Confidence level for the output (0.0-1.0)
         #[arg(long, default_value_t = 0.95)]
         confidence: f64,
-        /// Низкий перцентиль для box test (по методологии Crosby-Wallach)
+        /// Low percentile for the box test (per the Crosby-Wallach
+        /// methodology)
         #[arg(long, default_value_t = 10.0)]
         percentile: f64,
-        /// Принимать самоподписанные/невалидные TLS-сертификаты (для homelab)
+        /// Accept self-signed/invalid TLS certificates (for homelab use)
         #[arg(long, default_value_t = false)]
         insecure: bool,
-        /// Сохранить сырые измерения в CSV (class,elapsed_seconds) для
-        /// независимой перепроверки статистики
+        /// Save the raw measurements to CSV (class,elapsed_seconds) for
+        /// independently re-checking the statistics
         #[arg(long, value_name = "PATH")]
         output_csv: Option<PathBuf>,
-        /// Сохранить машиночитаемый JSON-отчёт (для CI/автоматизации)
+        /// Save a machine-readable JSON report (for CI/automation)
         #[arg(long, value_name = "PATH")]
         report: Option<PathBuf>,
-        /// Seed для генератора случайных чисел — фиксирует порядок
-        /// чередования запросов, чтобы прогон можно было точно повторить.
-        /// Если не указан, генерируется случайно и печатается в отчёте.
+        /// Seed for the random number generator — fixes the request
+        /// interleaving order so the run can be reproduced exactly.
+        /// If not given, one is generated randomly and printed in the
+        /// report.
         #[arg(long)]
         seed: Option<u64>,
-        /// Всё равно продолжить, даже если по оценке джиттера собранной
-        /// при --max-samples мощности заведомо не хватит для значимого
-        /// результата (по умолчанию sidecheck в этом случае останавливается,
-        /// чтобы не тратить часы на прогон, который всё равно будет inconclusive)
+        /// Proceed anyway even if the jitter estimate gathered at
+        /// --max-samples clearly won't have enough power for a
+        /// significant result (by default sidecheck stops in this case,
+        /// so it doesn't burn hours on a run that will be inconclusive
+        /// regardless)
         #[arg(long, default_value_t = false)]
         force: bool,
-        /// Прогнать весь эксперимент (пилот + основной замер) N раз подряд
-        /// и показать, насколько стабильна оценка утечки между прогонами —
-        /// если результат "гуляет" от прогона к прогону, ему нельзя доверять
-        /// так же, как стабильному.
+        /// Run the whole experiment (pilot + main measurement) N times in
+        /// a row and show how stable the leak estimate is across runs —
+        /// if the result "wanders" from run to run, it can't be trusted
+        /// the same way a stable one can.
         #[arg(long, default_value_t = 1)]
         repeat: usize,
     },
 
-    /// Pre-flight проверка сетевого канала до цели — до того, как тратить
-    /// время на полноценный check. Отвечает на вопрос "стоит ли вообще
-    /// пытаться измерять timing здесь", а не "есть ли утечка".
+    /// Pre-flight check of the network path to the target, before
+    /// spending time on a full check. Answers "is it even worth trying
+    /// to measure timing here", not "is there a leak".
     Doctor {
-        /// URL цели, например https://myapp.local/login
+        /// Target URL, e.g. https://myapp.local/login
         url: String,
-        /// Число замеров для оценки RTT/джиттера/потерь
+        /// Number of measurements for estimating RTT/jitter/loss
         #[arg(long, default_value_t = 300)]
         samples: usize,
-        /// Принимать самоподписанные/невалидные TLS-сертификаты
+        /// Accept self-signed/invalid TLS certificates
         #[arg(long, default_value_t = false)]
         insecure: bool,
     },
 }
 
-/// Минимум сэмплов на класс — ниже этого низкий перцентиль статистически
-/// шаткий, даже если формула по джиттеру говорит, что для обнаружения
-/// эффекта такого размера хватило бы меньшего числа.
+/// Minimum samples per class — below this, the low percentile is
+/// statistically shaky even if the jitter-based formula says a smaller
+/// number would suffice to detect an effect of that size.
 const MIN_SAMPLES: usize = 200;
 
 fn format_wall_time(seconds: f64) -> String {
@@ -194,7 +199,7 @@ fn read_secret(
     Ok(None)
 }
 
-/// Результат одного полного прогона check (пилот + основной замер).
+/// Result of one full check run (pilot + main measurement).
 struct RunResult {
     result: stats::BoxTestResult,
     jitter_seconds: f64,
@@ -234,9 +239,9 @@ fn run_one_check(
     let pilot_result = stats::box_test(&pilot.class_a, &pilot.class_b, percentile, confidence);
     let pilot_leak = pilot_result.estimated_leak.abs();
 
-    // Считаем итоговый размер выборки одним проходом и печатаем одно
-    // связное сообщение о том, как мы к нему пришли — вместо того чтобы
-    // сначала объявить один план, а потом тут же его отменить.
+    // Compute the final sample size in one pass and print one coherent
+    // message about how we got there — instead of announcing one plan
+    // and then immediately reversing it.
     let effective_samples = match explicit_samples {
         Some(n) => {
             eprintln!("using explicit --samples={n}");
@@ -348,9 +353,10 @@ fn run_one_check(
     })
 }
 
-/// При --repeat > 1 нужно разложить вывод (CSV/JSON) по отдельным файлам,
-/// иначе каждый следующий прогон затирает предыдущий. Вставляет "-runN"
-/// перед расширением; при repeat=1 путь не трогается.
+/// With --repeat > 1 the output (CSV/JSON) needs to be split into
+/// separate files, otherwise each subsequent run overwrites the previous
+/// one. Inserts "-runN" before the extension; with repeat=1 the path is
+/// left untouched.
 fn suffix_path(path: &std::path::Path, repeat: usize, index: usize) -> PathBuf {
     if repeat <= 1 {
         return path.to_path_buf();
@@ -367,11 +373,11 @@ fn suffix_path(path: &std::path::Path, repeat: usize, index: usize) -> PathBuf {
     path.with_file_name(file_name)
 }
 
-/// Печатает, насколько устойчива оценка утечки между независимыми
-/// прогонами --repeat. Разброс — не менее важный сигнал, чем сама оценка:
-/// если estimated leak "гуляет" от прогона к прогону, доверять ему нельзя
-/// так же, как стабильному результату, даже если каждый отдельный прогон
-/// формально значим.
+/// Prints how stable the leak estimate is across independent --repeat
+/// runs. The spread is just as important a signal as the estimate
+/// itself: if the estimated leak "wanders" from run to run, it can't be
+/// trusted the way a stable result can, even if each individual run is
+/// formally significant.
 fn print_stability_summary(outcomes: &[(RunResult, DetectionReport)]) {
     let leaks: Vec<f64> = outcomes
         .iter()
@@ -401,13 +407,14 @@ fn print_stability_summary(outcomes: &[(RunResult, DetectionReport)]) {
         format_duration_public(std_dev)
     );
 
-    // Значимость — более надёжный сигнал устойчивости, чем относительное
-    // отклонение точечной оценки: когда реальной утечки нет, mean крутится
-    // около нуля, и любое крошечное абсолютное отклонение даёт огромное
-    // отношение std_dev/mean — это не нестабильность, а ожидаемое поведение
-    // при отсутствии эффекта. Поэтому сначала смотрим на согласованность
-    // вердикта "значимо/не значимо", и только для случая "все прогоны
-    // значимы" имеет смысл спрашивать, насколько стабильна сама величина.
+    // Significance is a more reliable stability signal than the relative
+    // deviation of the point estimate: when there's no real leak, the
+    // mean hovers around zero, and any tiny absolute deviation gives a
+    // huge std_dev/mean ratio — that's not instability, it's expected
+    // behavior in the absence of an effect. So we first check agreement
+    // on the "significant/not significant" verdict, and only for the
+    // "all runs significant" case does it make sense to ask how stable
+    // the magnitude itself is.
     if significant_count == 0 {
         println!(
             "\n✓ consistently no significant difference across {} runs.",
@@ -511,9 +518,9 @@ fn main() -> Result<()> {
                 unreachable!("clap ArgGroup guarantees exactly one injection point")
             };
 
-            // seed фиксируем до первого использования RNG, чтобы весь прогон
-            // (генерация неверного значения + порядок чередования запросов)
-            // был воспроизводим по одному числу, которое печатается в отчёте.
+            // fix the seed before the first RNG use, so the whole run
+            // (wrong-value generation + request interleaving order) is
+            // reproducible from the one number printed in the report.
             let seed = seed.unwrap_or_else(|| rand::thread_rng().gen());
             let mut rng = StdRng::seed_from_u64(seed);
 
@@ -617,8 +624,9 @@ fn main() -> Result<()> {
             samples,
             insecure,
         } => {
-            // doctor не сравнивает классы — просто гоняет один и тот же
-            // безобидный запрос n раз и смотрит на форму распределения.
+            // doctor doesn't compare classes — it just sends the same
+            // harmless request n times and looks at the shape of the
+            // distribution.
             let injection = InjectionPoint::Header("X-Sidecheck-Doctor".to_string());
             let target = sampler::HttpTarget::new_with_options(&url, injection, insecure)?;
 
