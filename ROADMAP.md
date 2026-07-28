@@ -5,7 +5,9 @@
 - `check` / `doctor` core pipeline, box test + bootstrap CI, MAD-based
   jitter estimate, pilot-based feasibility guard
 - Header / query param / JSON body field injection, `--json-body`
-  templates for realistic multi-field login endpoints
+  templates for realistic multi-field login endpoints, `--extra-header`
+  for CSRF tokens/session cookies the endpoint needs before reaching the
+  value under test
 - `--repeat` stability summaries, `--seed` reproducibility,
   `--report`/`--output-csv` for CI
 - Published to crates.io (`sidecheck-core`, `sidecheck`), automated
@@ -57,10 +59,6 @@ shape:
 
 ## Also planned
 
-- [ ] Auth headers beyond the secret under test (Bearer/Cookie/CSRF
-      token) — many real login endpoints need a CSRF token or session
-      cookie before the password comparison is even reached, similar to
-      the `--json-body` gap that 0.2.0 closed for the JSON case
 - [ ] Reference target fixtures for FastAPI, Express, Actix, Axum, Spring
       — currently only Go and Node have non-amplified reference fixtures
 - [ ] A documented secret-length sweep finding the crossover point where

@@ -112,6 +112,15 @@ enum Commands {
         /// Accept self-signed/invalid TLS certificates (for homelab use)
         #[arg(long, default_value_t = false)]
         insecure: bool,
+        /// Static header sent unchanged on every request, as NAME=VALUE
+        /// (repeatable). For whatever the endpoint needs to reach the
+        /// code path under test that isn't the value being measured —
+        /// a CSRF token, a session cookie, a Bearer token for a
+        /// different auth layer than the one under test:
+        /// --extra-header 'Cookie=session=abc123'
+        /// --extra-header 'X-CSRF-Token=xyz'
+        #[arg(long = "extra-header", value_name = "NAME=VALUE")]
+        extra_headers: Vec<String>,
         /// Save the raw measurements to CSV (class,elapsed_seconds) for
         /// independently re-checking the statistics
         #[arg(long, value_name = "PATH")]
@@ -152,6 +161,12 @@ enum Commands {
         /// Accept self-signed/invalid TLS certificates
         #[arg(long, default_value_t = false)]
         insecure: bool,
+        /// Static header sent unchanged on every probe request, as
+        /// NAME=VALUE (repeatable) — same as `check`'s flag, useful when
+        /// the endpoint needs a CSRF token/session cookie to give a
+        /// realistic RTT reading at all.
+        #[arg(long = "extra-header", value_name = "NAME=VALUE")]
+        extra_headers: Vec<String>,
     },
 }
 
@@ -159,6 +174,25 @@ enum Commands {
 /// statistically shaky even if the jitter-based formula says a smaller
 /// number would suffice to detect an effect of that size.
 const MIN_SAMPLES: usize = 200;
+
+/// Parses repeated --extra-header NAME=VALUE arguments. Splits on the
+/// first '=' only, so a value that itself contains '=' (a cookie pair,
+/// a base64 token with padding) is preserved intact.
+fn parse_extra_headers(raw: &[String]) -> Result<Vec<(String, String)>> {
+    raw.iter()
+        .map(|entry| {
+            entry
+                .split_once('=')
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .with_context(|| {
+                    format!(
+                        "--extra-header '{entry}' is not in NAME=VALUE form \
+                         (e.g. --extra-header 'X-CSRF-Token=xyz')"
+                    )
+                })
+        })
+        .collect()
+}
 
 fn format_wall_time(seconds: f64) -> String {
     if seconds < 60.0 {
@@ -480,6 +514,7 @@ fn main() -> Result<()> {
             confidence,
             percentile,
             insecure,
+            extra_headers,
             output_csv,
             report,
             seed,
@@ -560,7 +595,12 @@ fn main() -> Result<()> {
             let injection_desc = injection.describe();
             eprintln!("injection point: {}\n", injection_desc);
 
-            let target = sampler::HttpTarget::new_with_options(&url, injection, insecure)?;
+            let target = sampler::HttpTarget::new_with_options(
+                &url,
+                injection,
+                insecure,
+                parse_extra_headers(&extra_headers)?,
+            )?;
             let repeat = repeat.max(1);
 
             let mut outcomes: Vec<(RunResult, DetectionReport)> = Vec::with_capacity(repeat);
@@ -623,12 +663,18 @@ fn main() -> Result<()> {
             url,
             samples,
             insecure,
+            extra_headers,
         } => {
             // doctor doesn't compare classes — it just sends the same
             // harmless request n times and looks at the shape of the
             // distribution.
             let injection = InjectionPoint::Header("X-Sidecheck-Doctor".to_string());
-            let target = sampler::HttpTarget::new_with_options(&url, injection, insecure)?;
+            let target = sampler::HttpTarget::new_with_options(
+                &url,
+                injection,
+                insecure,
+                parse_extra_headers(&extra_headers)?,
+            )?;
 
             eprintln!("probing {url} ({samples} requests)...");
             let pb = ProgressBar::new(samples as u64);
