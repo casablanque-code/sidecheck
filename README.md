@@ -4,92 +4,48 @@ How do you know your password comparison is actually constant-time?
 
 Measure it.
 
+> **AI-assisted ("vibe") coding has made this class of bug far more
+> common.** LLMs reliably write auth comparisons that work and pass
+> tests, but aren't constant-time — `if candidate == secret` is the first
+> thing most models reach for unless explicitly told otherwise. If your
+> login endpoint was written with Claude/Copilot/Cursor and never had a
+> dedicated security review, there's a good chance nobody has checked
+> this.
+
 `sidecheck` is a CLI tool that audits your own HTTP endpoints for remote
-timing side-channels — the class of bug where comparing a secret with `==`
-lets an attacker recover it character-by-character by measuring response
-time instead of brute-forcing the whole thing.
+timing side-channels — the class of bug where comparing a secret with
+`==` lets an attacker recover it character-by-character by measuring
+response time instead of brute-forcing the whole thing.
 
-It is built as a measuring instrument, not an exploit: it tells you whether
-a measurable timing channel exists and how confident it is, not "here is
-your password."
+It's built as a measuring instrument, not an exploit: it tells you
+whether a measurable timing channel exists and how confident it is, not
+"here is your password."
 
-## Why this matters
+## How it works
 
-AI-assisted ("vibe") coding has made this class of bug far more common —
-LLMs reliably write auth comparisons that work and pass tests, but aren't
-constant-time. If your login endpoint was written with Claude/Copilot/Cursor
-and never had a security review, there's a good chance nobody has checked
-this.
+```mermaid
+flowchart TD
+    A[secret] --> B[generate requests<br/>wrong value vs correct value]
+    B --> C[randomize order<br/>interleaved blocks]
+    C --> D[measure latency<br/>real HTTP round trips]
+    D --> E[bootstrap resampling]
+    E --> F[confidence interval]
+    F --> G[report<br/>significant leak, or clean result]
+```
 
-## Methodology
+Network jitter is orders of magnitude larger than the signal you're
+trying to detect, so naive mean/median analysis doesn't work. `sidecheck`
+uses the box-test methodology from Crosby, Wallach & Riedi (ACM TISSEC,
+2009) instead — full reasoning and formulas in
+[docs/methodology.md](./docs/methodology.md) and
+[docs/statistics.md](./docs/statistics.md).
 
-Naive mean/median timing analysis on network measurements is unreliable —
-network jitter is orders of magnitude larger than the CPU-level signal
-you're trying to detect. `sidecheck` uses the methodology from Crosby,
-Wallach & Riedi, *"Opportunities and Limits of Remote Timing Attacks"*
-(ACM TISSEC, 2009):
-
-- network noise can only **add** delay, never remove it, so low percentiles
-  (e.g. p10) of a sample carry far less noise than the mean or even the raw
-  minimum
-- a **box test** compares the low percentile of two classes of requests
-  (e.g. "correct prefix" vs "wrong prefix")
-- confidence intervals are computed via bootstrap resampling — no
-  assumption of normally-distributed network latency
-- request order is randomized in interleaved blocks (never "all A, then all
-  B") so time-of-day drift or server warm-up doesn't bias the result
-- before the full run, a pilot batch estimates network jitter and reports
-  how many samples are actually needed to detect a leak of a given size —
-  if the network is too noisy for the target signal, it says so honestly
-  instead of guessing
-
-## Usage
-
-Simple mode — give it your real secret, it generates a matching-length wrong
-value automatically:
+## Example
 
 ```sh
 sidecheck check https://myapp.local/login \
   --header X-API-Key \
   --secret "my-real-api-key-do-not-share"
-```
-
-Sample size is picked automatically from a quick pilot run — you don't need
-to guess `--samples` up front. Works against any of three injection points:
-
-```sh
-# HTTP header (API keys, tokens)
-sidecheck check https://myapp.local/api --header X-API-Key --secret "..."
-
-# query parameter (legacy token-in-URL endpoints)
-sidecheck check https://myapp.local/api --query token --secret "..."
-
-# JSON POST body field (typical web login forms)
-sidecheck check https://myapp.local/login --json-field password --secret "..."
-```
-
-Most real login endpoints need more than just the field under test in the
-body — a `username`/`email` the backend has to look up before it even
-reaches the password comparison. Use `--json-body` to supply the rest of
-the body as a template; `--json-field` is still what gets swapped between
-the two compared values on every request:
-
-```sh
-sidecheck check https://myapp.local/login \
-  --json-field password \
-  --json-body '{"username": "admin"}' \
-  --secret "..."
-```
-
-Advanced mode — full control over both compared values (e.g. to test a
-specific guessed prefix instead of the full secret):
-
-```sh
-sidecheck check https://myapp.local/login \
-  --header X-API-Key \
-  --value-a "0000000000000000000000000" \
-  --value-b "correct-se0000000000000000" \
-  --samples 5000
 ```
 
 ```
@@ -117,13 +73,62 @@ network jitter   1.80 ms
 sidecheck cannot prove the absence of a timing leak — only detect a
 statistically significant one under the tested conditions. A clean
 result here is not a safety guarantee.
-generated by sidecheck 0.1.0 · seed 4891023741 (rerun with --seed 4891023741 to reproduce request order)
+generated by sidecheck 0.2.1 · seed 4891023741 (rerun with --seed 4891023741 to reproduce request order)
 ```
 
-## Checking whether measurement is even feasible first
+Sample size is picked automatically from a quick pilot run. Works against
+a header, a query parameter, or a JSON body field:
 
-Before spending time on `check`, ask whether the network path is even
-capable of a meaningful measurement:
+```sh
+sidecheck check https://myapp.local/api   --header X-API-Key --secret "..."
+sidecheck check https://myapp.local/api   --query token      --secret "..."
+sidecheck check https://myapp.local/login --json-field password --secret "..."
+```
+
+Most real login endpoints need more than just the field under test — a
+`username`/`email` the backend has to look up before it even reaches the
+password comparison. `--json-body` supplies the rest of the body as a
+template:
+
+```sh
+sidecheck check https://myapp.local/login \
+  --json-field password \
+  --json-body '{"username": "admin"}' \
+  --secret "..."
+```
+
+For secrets you don't want in shell history, `--value-a`/`--value-b`
+advanced mode, and CI-friendly `--report`/`--output-csv` output, see
+[docs/usage.md](./docs/usage.md).
+
+## Install
+
+```sh
+cargo install --locked sidecheck
+```
+
+`--locked` matters: without it, `cargo install` re-resolves dependencies
+against whatever is newest on crates.io, which can pull in transitive
+crates requiring a newer Rust edition than your installed toolchain
+supports. `--locked` uses the `Cargo.lock` committed in this repo, which
+is known to build. MSRV is `rust-version = "1.85"` — update via
+[rustup](https://rustup.rs) if your system Cargo predates that (some LTS
+distros ship an older one by default).
+
+```sh
+# build from source instead
+cargo build --release
+./target/release/sidecheck check --help
+```
+
+## doctor: is this measurement even worth attempting?
+
+`sidecheck doctor` is a **measurement feasibility estimator**, not just a
+diagnostic ping. It answers "is this network path even capable of
+resolving a leak of a realistic size" *before* you spend minutes to hours
+on a full `check` — the same question `check` asks itself from its pilot
+batch, surfaced up front so you can decide before committing to a
+specific field or secret.
 
 ```sh
 sidecheck doctor https://myapp.local/login
@@ -147,197 +152,40 @@ environment quality:   GOOD
 this path looks suitable for timing measurement. proceed with `sidecheck check`.
 ```
 
-Note the recommended sample count above is large even for a "GOOD" quality
-path — `GOOD` means the path is *stable enough that this estimate is
-meaningful*, not that the run will be fast. A ~1μs leak is genuinely hard
-to see behind 0.42ms of jitter; that gap is exactly why the estimate is in
-the millions here. `check` sizes its own run automatically and will refuse
-to proceed past `--max-samples` (default 200,000) unless you pass `--force`
-— see below.
-
-`check` itself already estimates this from its own pilot batch and refuses
-to run an infeasible full measurement by default (see below) — `doctor` is
-for when you want that answer up front, without committing to a specific
-field/secret yet, e.g. before deciding whether it's even worth testing a
-target reachable only over the public internet.
-
-## Handling secrets
-
-`--secret` is convenient but shows up in `ps aux` and your shell history —
-fine for a throwaway test key, not for anything real. Prefer:
-
-```sh
-# from an environment variable
-sidecheck check https://myapp.local/login --header X-API-Key --secret-env API_KEY
-
-# piped from stdin (e.g. from a password manager)
-pass show myapp/api-key | sidecheck check https://myapp.local/login --header X-API-Key --secret-stdin
-```
-
-`sidecheck` itself never sends your secret anywhere except the target you
-told it to test, and never logs it to disk. It does **not** attempt to
-scrub `--secret` from your shell's history file — from a child process
-there's no reliable, portable way to do that (the shell keeps history in
-memory until it writes the file on exit, and the format differs between
-bash/zsh/fish). Use `--secret-env`/`--secret-stdin` instead of trying to
-clean up after the fact.
-
-## Reproducibility
-
-Every run picks (or accepts via `--seed`) a seed that determines the
-request interleaving order and the generated wrong value. It's printed in
-the report and the JSON output — pass it back with `--seed` to reproduce
-the exact same request sequence, e.g. when debugging an odd result. Note
-that with `--repeat`, `--seed` reproduces the *whole sequence* of runs,
-not a single run in isolation — each repeat continues drawing from the
-same RNG stream rather than restarting it.
-
-## Checking whether one run's estimate can be trusted
-
-A single run's `estimated leak` is one point estimate; it doesn't tell you
-whether that number would look similar if you ran it again. `--repeat N`
-runs the full pilot+measurement cycle N times and summarizes how much the
-estimate and the significance verdict actually move around:
-
-```sh
-sidecheck check https://myapp.local/login --header X-API-Key --secret-env API_KEY --repeat 5
-```
-
-```
-────────────────────────────────────────────────
-stability summary across 5 runs
-────────────────────────────────────────────────
-
-significant in 5/5 runs
-estimated leak   mean 12.23 ms · range [12.20 ms, 12.25 ms] · std dev 21.8 μs
-
-✓ consistently significant with a stable magnitude across runs.
-```
-
-The verdict prioritizes whether the significance call itself is
-consistent (0/N or N/N) over the raw variance of the point estimate —
-when there's genuinely no leak, the mean sits near zero and any tiny
-absolute wobble would otherwise look like huge *relative* instability,
-which is a statistical artifact of dividing by ~zero, not a real problem.
-Mixed significance (some runs flag it, some don't) is the case actually
-worth distrusting — it usually means the effect sits right at the edge of
-what the sample size can resolve.
-
-With `--output-csv`/`--report`, each repeat gets its own file
-(`report-run1.json`, `report-run2.json`, ...) rather than overwriting the
-same one N times.
-
-## When sidecheck refuses to run
-
-If the pilot batch estimates the network is too noisy relative to the
-detected effect to reach significance within `--max-samples` (200,000 by
-default), `sidecheck check` stops **before** the main run instead of
-silently spending minutes-to-hours on a result that would almost certainly
-be inconclusive. It explains the signal-to-noise ratio and the estimated
-wall-clock time it would have taken. Options at that point:
-
-- test from a lower-latency vantage point (same LAN/datacenter as the
-  target, or the server itself over `127.0.0.1`) — `sidecheck doctor` will
-  confirm whether that's actually better before you commit to it
-- pass `--force` if you understand the run will likely be inconclusive and
-  want the data anyway
-- raise `--max-samples` if you're willing to wait longer
-
-`--samples` set explicitly bypasses this gate (you've already made the
-call) but still prints the same time/power estimate as a heads-up.
-
-Full flag reference: `sidecheck check --help` / `sidecheck doctor --help`
-— tuning knobs like `--pilot-samples`, `--block-size`, `--confidence`, and
-`--percentile` are documented there rather than duplicated here, since
-duplicating them in prose is exactly how documentation quietly goes stale.
-
-## Reports for CI / automation
-
-```sh
-sidecheck check https://myapp.local/login --header X-API-Key --secret-env API_KEY \
-  --report report.json --output-csv raw.csv
-```
-
-`report.json` carries the sidecheck version, seed, and timestamp alongside
-the verdict — a report from `v0.1.0` shouldn't be trusted the same way as
-one from a future version with improved statistics.
-
-## Self-verification
-
-`test-fixture/test_fixture.py` is a small reference server with a
-deliberately vulnerable `/vulnerable` endpoint and a safe `/safe` endpoint
-using `hmac.compare_digest`. Use it to confirm `sidecheck` correctly flags
-the vulnerable one and stays silent on the safe one before trusting it on a
-real target:
-
-```sh
-python3 test-fixture/test_fixture.py &
-sidecheck check http://127.0.0.1:8000/vulnerable --header X-API-Key --secret "correct-secret-key-123456"
-sidecheck check http://127.0.0.1:8000/safe        --header X-API-Key --secret "correct-secret-key-123456"
-```
+The recommended sample count can look enormous even on a "GOOD" path —
+`GOOD` means the *estimate itself* is trustworthy, not that the run will
+be fast. A ~1μs leak is genuinely hard to see behind 0.42ms of jitter;
+`check` will refuse to run past `--max-samples` (default 200,000) in a
+case like this unless you pass `--force`. See
+[docs/statistics.md](./docs/statistics.md#required-sample-size) for the
+exact formula behind the recommendation.
 
 ## Limitations
 
 **sidecheck cannot prove the absence of a timing leak.** A clean result
-means no statistically significant difference was found *under the tested
-conditions* (this sample size, this network path, this percentile) — not
-that the endpoint is safe. A smaller leak, a noisier network, or a
-different code path could still hide a real issue. Treat a positive result
-as strong evidence of a bug; treat a negative result as "nothing found
-here," not a certificate of safety.
+means no statistically significant difference was found *under the
+tested conditions* — not that the endpoint is safe. Treat a positive
+result as strong evidence of a bug; treat a negative result as "nothing
+found here," not a certificate of safety.
 
-`bootstrap confidence` in the report is the confidence level of the
-bootstrap-resampled interval around the measured difference — it answers
-"how sure are we this specific difference isn't just noise," not "what's
-the probability this server is vulnerable" and not a p-value in the
-classical hypothesis-testing sense.
+Two more limits worth knowing before you trust a result: `sidecheck` has
+no way to tell whether your injection point actually reached the code
+path you meant to test (see `--json-body` above and
+[docs/limitations.md](./docs/limitations.md)), and a genuine leak on a
+short secret is often not reliably detectable over real HTTP at all — the
+network noise floor can exceed a nanosecond-scale CPU leak entirely. Full
+details, plus current project status, in
+[docs/limitations.md](./docs/limitations.md).
 
-## Status
+## More
 
-`v0.1`, pre-1.0 — expect rough edges. Working and validated end-to-end:
-detection (`check`), pre-flight diagnostics (`doctor`), the amplified
-Python fixture for pipeline validation, and two non-amplified reference
-fixtures (`realistic-fixtures/`, Go and Node) confirming that a real
-(not artificially amplified) `==`/`===` leak on a short secret is often
-*not* reliably detectable over HTTP — the noise floor of a real request,
-even on loopback, can exceed a nanosecond-scale CPU-level leak. That's an
-honest limit of the method, not a bug (see Limitations above).
-
-Not yet done: reference targets for FastAPI/Express/Actix/Axum/Spring
-(only Go/Node so far), a longer-secret sweep to find the HTTP-detectable
-crossover length, CI coverage of the actual detection logic end-to-end
-(current CI only runs fmt/clippy/unit-tests, not a real check-against-a-
-fixture pass), crates.io publishing. Then SSH/TLS key entropy auditing
-(shared-prime-factor detection via batch-GCD across your own fleet) as
-the next major feature, separate from timing analysis.
-
-## Install
-
-```sh
-cargo install --locked sidecheck
-```
-
-`--locked` matters here: without it, `cargo install` re-resolves
-dependencies against whatever is newest on crates.io today, which can pull
-in transitive crates that require the 2024 Rust edition — you'll see an
-error like `feature edition2024 is required`. `--locked` uses the
-`Cargo.lock` committed in this repo instead, which is known to build.
-
-We also declare `rust-version = "1.85"` (see `Cargo.toml`, edition2024
-stabilized in that release) — on Cargo 1.85+ this makes dependency
-resolution itself MSRV-aware, so even a fresh `cargo install` without
-`--locked` will avoid transitive versions that need a newer edition than
-we declare. That awareness doesn't exist on Cargo versions older than
-1.85 (e.g. the one some LTS distros ship by default), which is exactly
-why `--locked` is still the belt-and-suspenders recommendation above —
-update via [rustup](https://rustup.rs) if your system Cargo predates 1.85.
-
-## Build
-
-```sh
-cargo build --release
-./target/release/sidecheck check --help
-```
+- [docs/methodology.md](./docs/methodology.md) — the box-test approach and why it works
+- [docs/statistics.md](./docs/statistics.md) — the exact formulas
+- [docs/usage.md](./docs/usage.md) — secrets handling, advanced mode, the refusal guard
+- [docs/reproducibility.md](./docs/reproducibility.md) — seeds, `--repeat`, CI reports, self-verification fixtures
+- [docs/limitations.md](./docs/limitations.md) — full limitations and project status
+- [ROADMAP.md](./ROADMAP.md) — what's next, including a GitHub Action for CI gates
+- [CHANGELOG.md](./CHANGELOG.md)
 
 ## License
 
