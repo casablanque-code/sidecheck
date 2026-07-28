@@ -50,7 +50,7 @@ jobs:
         run: |
           python3 test-fixture/test_fixture.py &
           for i in $(seq 1 20); do
-            curl -sf -o /dev/null http://127.0.0.1:8000/safe -H "X-API-Key: x" && break
+            curl -s -o /dev/null http://127.0.0.1:8000/safe -H "X-API-Key: x" && break
             sleep 0.5
           done
 
@@ -80,3 +80,72 @@ jobs:
 
       - name: sidecheck doctor runs cleanly
         run: ./target/release/sidecheck doctor http://127.0.0.1:8000/safe
+
+      - name: Start json-login fixture (--json-body coverage)
+        run: |
+          python3 realistic-fixtures/json_login_fixture.py &
+          for i in $(seq 1 20); do
+            curl -s -o /dev/null -X POST http://127.0.0.1:8003/safe \
+              -H "Content-Type: application/json" -d '{"username":"admin","password":"x"}' && break
+            sleep 0.5
+          done
+
+      - name: without --json-body, no signal reaches the comparison (regression for the 0.2.0 gap)
+        run: |
+          ./target/release/sidecheck check http://127.0.0.1:8003/vulnerable \
+            --json-field password --secret correct-secret-key-123456 \
+            --samples 3000 --report /tmp/json-no-body.json
+          python3 -c "
+          import json
+          r = json.load(open('/tmp/json-no-body.json'))
+          assert r['significant'] is False, f'expected no signal without --json-body (wrong username masks the leak), got: {r}'
+          print('OK: confirmed the blind spot --json-body exists to close — no signal without it')
+          "
+
+      - name: --json-body reaches the comparison and flags the vulnerable endpoint
+        run: |
+          ./target/release/sidecheck check http://127.0.0.1:8003/vulnerable \
+            --json-field password --json-body '{"username": "admin"}' \
+            --secret correct-secret-key-123456 \
+            --samples 3000 --report /tmp/json-body.json
+          python3 -c "
+          import json
+          r = json.load(open('/tmp/json-body.json'))
+          assert r['significant'] is True, f'expected a detected leak with --json-body, got: {r}'
+          print('OK: json login endpoint correctly flagged with --json-body, leak =', r['estimated_leak_us'], 'us')
+          "
+
+      - name: --json-body stays quiet on the safe json-login endpoint
+        run: |
+          ./target/release/sidecheck check http://127.0.0.1:8003/safe \
+            --json-field password --json-body '{"username": "admin"}' \
+            --secret correct-secret-key-123456 \
+            --samples 3000 --report /tmp/json-safe.json
+          python3 -c "
+          import json
+          r = json.load(open('/tmp/json-safe.json'))
+          assert r['significant'] is False, f'expected no leak, got a false positive: {r}'
+          print('OK: safe json-login endpoint correctly not flagged')
+          "
+
+      - name: --json-body rejects malformed input
+        run: |
+          set +e
+          ./target/release/sidecheck check http://127.0.0.1:8003/vulnerable \
+            --json-field password --json-body 'not json' --secret x 2>/tmp/badjson.err
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then echo "expected a non-zero exit for invalid --json-body JSON"; exit 1; fi
+          grep -q "not valid JSON" /tmp/badjson.err || { echo "unexpected error message:"; cat /tmp/badjson.err; exit 1; }
+          echo "OK: invalid --json-body JSON rejected with a clear error"
+
+      - name: --json-body without --json-field is rejected, not silently ignored
+        run: |
+          set +e
+          ./target/release/sidecheck check http://127.0.0.1:8000/vulnerable \
+            --header X-API-Key --json-body '{"a":1}' --secret x 2>/tmp/noflag.err
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then echo "expected a non-zero exit for --json-body without --json-field"; exit 1; fi
+          grep -q "requires --json-field" /tmp/noflag.err || { echo "unexpected error message:"; cat /tmp/noflag.err; exit 1; }
+          echo "OK: --json-body without --json-field rejected, regression for the 0.2.1 clap ArgGroup bug covered"
