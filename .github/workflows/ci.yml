@@ -70,7 +70,7 @@ jobs:
         run: |
           ./target/release/sidecheck check http://127.0.0.1:8000/safe \
             --header X-API-Key --secret correct-secret-key-123456 \
-            --samples 3000 --report /tmp/safe.json
+            --samples 3000 --confidence 0.999 --report /tmp/safe.json
           python3 -c "
           import json
           r = json.load(open('/tmp/safe.json'))
@@ -90,17 +90,24 @@ jobs:
             sleep 0.5
           done
 
-      - name: without --json-body, no signal reaches the comparison (regression for the 0.2.0 gap)
+      - name: without --json-body, the request never reaches the password comparison at all
         run: |
-          ./target/release/sidecheck check http://127.0.0.1:8003/vulnerable \
-            --json-field password --secret correct-secret-key-123456 \
-            --samples 3000 --report /tmp/json-no-body.json
-          python3 -c "
-          import json
-          r = json.load(open('/tmp/json-no-body.json'))
-          assert r['significant'] is False, f'expected no signal without --json-body (wrong username masks the leak), got: {r}'
-          print('OK: confirmed the blind spot --json-body exists to close — no signal without it')
-          "
+          # This is a protocol-level fact (wrong/missing username -> 401
+          # before the password is even looked at), not something to
+          # infer from sidecheck's own statistical test — asserting
+          # significant == False on a live bootstrap CI would carry that
+          # test's inherent ~5% false-positive rate at 95% confidence,
+          # which makes CI flaky for no good reason. Verify directly.
+          code_wrong=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8003/vulnerable \
+            -H "Content-Type: application/json" -d '{"password":"0000000000000000000000000"}')
+          code_right=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8003/vulnerable \
+            -H "Content-Type: application/json" -d '{"password":"correct-secret-key-123456"}')
+          echo "without username: wrong-password -> $code_wrong, correct-password -> $code_right"
+          if [ "$code_wrong" != "401" ] || [ "$code_right" != "401" ]; then
+            echo "expected 401 for both regardless of password when username is missing"
+            exit 1
+          fi
+          echo "OK: confirmed the blind spot --json-body exists to close — both classes hit the same early exit without it"
 
       - name: --json-body reaches the comparison and flags the vulnerable endpoint
         run: |
@@ -120,7 +127,7 @@ jobs:
           ./target/release/sidecheck check http://127.0.0.1:8003/safe \
             --json-field password --json-body '{"username": "admin"}' \
             --secret correct-secret-key-123456 \
-            --samples 3000 --report /tmp/json-safe.json
+            --samples 3000 --confidence 0.999 --report /tmp/json-safe.json
           python3 -c "
           import json
           r = json.load(open('/tmp/json-safe.json'))
