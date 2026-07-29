@@ -187,3 +187,107 @@ jobs:
             exit 1
           fi
           echo "OK: compare doesn't fail CI on a leak that isn't new"
+
+  action-selftest:
+    name: self-test the composite GitHub Action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start reference fixture
+        run: |
+          python3 test-fixture/test_fixture.py &
+          for i in $(seq 1 20); do
+            curl -s -o /dev/null http://127.0.0.1:8000/safe -H "X-API-Key: x" && break
+            sleep 0.5
+          done
+
+      # Pinned to an existing published release rather than the sidecheck
+      # binary built from this PR's own changes — the action's job is to
+      # orchestrate that binary, not to re-test sidecheck's own detection
+      # logic (already covered by the e2e job above). If a PR changes
+      # action.yml, this is what actually exercises the change.
+      - name: Run action against the vulnerable endpoint
+        id: vulnerable
+        uses: ./action
+        with:
+          target-url: http://127.0.0.1:8000/vulnerable
+          header: X-API-Key
+          secret: correct-secret-key-123456
+          samples: '2000'
+          version: 'v0.2.1'
+          fail-on-leak: 'false'
+          comment-on-pr: 'false'
+
+      - name: Assert the vulnerable endpoint was flagged
+        run: |
+          if [ "${{ steps.vulnerable.outputs.significant }}" != "true" ]; then
+            echo "expected significant=true for the vulnerable endpoint, got '${{ steps.vulnerable.outputs.significant }}'"
+            exit 1
+          fi
+          if [ -z "${{ steps.vulnerable.outputs.estimated-leak-us }}" ]; then
+            echo "expected a non-empty estimated-leak-us output"
+            exit 1
+          fi
+          echo "OK: action correctly reports significant=true, leak=${{ steps.vulnerable.outputs.estimated-leak-us }}us"
+
+      - name: Run action against the safe endpoint
+        id: safe
+        uses: ./action
+        with:
+          target-url: http://127.0.0.1:8000/safe
+          header: X-API-Key
+          secret: correct-secret-key-123456
+          samples: '2000'
+          confidence: '0.999'
+          version: 'v0.2.1'
+          fail-on-leak: 'true'
+          comment-on-pr: 'false'
+
+      - name: Assert the safe endpoint was not flagged
+        run: |
+          if [ "${{ steps.safe.outputs.significant }}" != "false" ]; then
+            echo "expected significant=false for the safe endpoint, got '${{ steps.safe.outputs.significant }}'"
+            exit 1
+          fi
+          echo "OK: action correctly reports significant=false, and fail-on-leak=true didn't fail this step since there was nothing to flag"
+
+      - name: Compare via the action (regression case)
+        id: compare-regression
+        uses: ./action
+        with:
+          target-url: http://127.0.0.1:8000/vulnerable
+          header: X-API-Key
+          secret: correct-secret-key-123456
+          samples: '2000'
+          version: 'v0.2.1'
+          baseline-report: ${{ steps.safe.outputs.report-path }}
+          fail-on-regression: 'false'
+          comment-on-pr: 'false'
+
+      - name: Assert the action's compare step flagged a regression
+        run: |
+          if [ "${{ steps.compare-regression.outputs.regression }}" != "true" ]; then
+            echo "expected regression=true (clean baseline, leaking current), got '${{ steps.compare-regression.outputs.regression }}'"
+            exit 1
+          fi
+          echo "OK: action's baseline-report path correctly flags a regression"
+
+      - name: Reject an invalid input combination
+        id: invalid
+        continue-on-error: true
+        uses: ./action
+        with:
+          target-url: http://127.0.0.1:8000/vulnerable
+          header: X-API-Key
+          query: token
+          secret: correct-secret-key-123456
+          comment-on-pr: 'false'
+
+      - name: Assert the invalid combination was rejected
+        run: |
+          if [ "${{ steps.invalid.outcome }}" != "failure" ]; then
+            echo "expected the action to fail when both header and query are set"
+            exit 1
+          fi
+          echo "OK: action rejects an ambiguous header+query combination"

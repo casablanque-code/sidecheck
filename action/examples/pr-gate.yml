@@ -1,0 +1,58 @@
+# Example: fail a PR when it introduces a NEW timing leak on a preview
+# deployment, without flagging a leak that already existed before this
+# change. Copy this into your own repo's .github/workflows/ and adjust
+# the deploy-preview step for your own stack.
+#
+# Baseline storage here uses actions/cache keyed on the base branch — one
+# reasonable approach among several (see docs/reproducibility.md in the
+# sidecheck repo for the tradeoffs). The cache holds last known-good
+# report for that branch; it's intentionally NOT the same thing as "no
+# leak ever", just "no leak as of the last time this ran against main".
+name: Timing regression gate
+
+on:
+  pull_request:
+
+jobs:
+  sidecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Replace with however your project actually stands up a preview —
+      # this step is a placeholder.
+      - name: Deploy preview environment
+        id: deploy
+        run: |
+          echo "url=https://preview-${{ github.event.pull_request.number }}.example.com" >> "$GITHUB_OUTPUT"
+
+      - name: Restore baseline report from main
+        id: baseline-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: sidecheck-baseline.json
+          key: sidecheck-baseline-main
+
+      - name: Run sidecheck
+        id: sidecheck
+        uses: casablanque-code/sidecheck/action@v0.2.1
+        with:
+          target-url: ${{ steps.deploy.outputs.url }}/login
+          header: X-API-Key
+          secret: ${{ secrets.SIDECHECK_TEST_KEY }}
+          baseline-report: ${{ steps.baseline-cache.outputs.cache-hit == 'true' && 'sidecheck-baseline.json' || '' }}
+          fail-on-regression: 'true'
+
+      # Only runs on main, after merge — refreshes the baseline for the
+      # next PR's comparison. On a PR itself, this step is skipped, so a
+      # PR never poisons the baseline with its own (possibly broken) report.
+      - name: Update baseline cache (main only)
+        if: github.ref == 'refs/heads/main'
+        run: cp "${{ steps.sidecheck.outputs.report-path }}" sidecheck-baseline.json
+
+      - name: Save baseline cache (main only)
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: sidecheck-baseline.json
+          key: sidecheck-baseline-main
