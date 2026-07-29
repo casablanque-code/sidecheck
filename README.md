@@ -174,6 +174,23 @@ case like this unless you pass `--force`. See
 [docs/statistics.md](./docs/statistics.md#required-sample-size) for the
 exact formula behind the recommendation.
 
+## GitHub Action
+
+For CI: a composite Action wraps the binary and can fail a PR only on a
+*new* leak relative to a baseline, not any pre-existing one.
+
+```yaml
+- uses: casablanque-code/sidecheck/action@v0.2.1
+  with:
+    target-url: https://preview.example.com/login
+    header: X-API-Key
+    secret: ${{ secrets.SIDECHECK_TEST_KEY }}
+```
+
+See [action/README.md](./action/README.md) for the full input/output
+reference and [action/examples/pr-gate.yml](./action/examples/pr-gate.yml)
+for a complete baseline-comparison workflow.
+
 ## Limitations
 
 **sidecheck cannot prove the absence of a timing leak.** A clean result
@@ -198,7 +215,8 @@ details, plus current project status, in
 - [docs/usage.md](./docs/usage.md) — secrets handling, advanced mode, the refusal guard
 - [docs/reproducibility.md](./docs/reproducibility.md) — seeds, `--repeat`, CI reports, self-verification fixtures
 - [docs/limitations.md](./docs/limitations.md) — full limitations and project status
-- [ROADMAP.md](./ROADMAP.md) — what's next, including a GitHub Action for CI gates
+- [action/README.md](./action/README.md) — the GitHub Action's full input/output reference
+- [ROADMAP.md](./ROADMAP.md) — what's next
 - [CHANGELOG.md](./CHANGELOG.md)
 
 ## License

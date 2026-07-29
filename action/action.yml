@@ -1,0 +1,320 @@
+name: 'sidecheck'
+description: >-
+  Audit an HTTP endpoint for a remote timing side-channel and, optionally,
+  fail the build only when a new leak was introduced relative to a
+  baseline report (not on a pre-existing one).
+author: 'casablanque-code'
+branding:
+  icon: 'clock'
+  color: 'red'
+
+inputs:
+  target-url:
+    description: 'Endpoint URL to check, e.g. https://preview-123.myapp.dev/login'
+    required: true
+  secret:
+    description: >-
+      The real secret value to test with. Pass this from a GitHub Secret
+      (${{ secrets.MY_API_KEY }}), never a literal value in the workflow
+      file.
+    required: true
+  header:
+    description: 'Inject the value into this HTTP header. Exactly one of header/query/json-field is required.'
+    required: false
+    default: ''
+  query:
+    description: 'Inject the value into this query parameter.'
+    required: false
+    default: ''
+  json-field:
+    description: 'Inject the value into this field of the POST JSON body.'
+    required: false
+    default: ''
+  json-body:
+    description: >-
+      JSON template for the rest of the body fields when json-field is
+      used, e.g. '{"username": "admin"}'. See the main README for why
+      this is usually necessary for real login endpoints.
+    required: false
+    default: ''
+  extra-headers:
+    description: >-
+      Static headers sent unchanged on every request, one NAME=VALUE per
+      line — for CSRF tokens or session cookies the endpoint needs before
+      it reaches the value under test.
+    required: false
+    default: ''
+  samples:
+    description: 'Number of measurements per class. Auto-selected from a pilot run if not given.'
+    required: false
+    default: ''
+  confidence:
+    description: 'Confidence level (0.0-1.0).'
+    required: false
+    default: '0.95'
+  max-samples:
+    description: 'Ceiling for the automatically chosen sample count.'
+    required: false
+    default: '200000'
+  insecure:
+    description: 'Accept self-signed/invalid TLS certificates (for preview environments with self-signed certs).'
+    required: false
+    default: 'false'
+  force:
+    description: 'Proceed even if the pilot run estimates the network is too noisy for a reliable result.'
+    required: false
+    default: 'false'
+  version:
+    description: >-
+      sidecheck release to install, e.g. 'v0.2.1'. Defaults to the latest
+      release. Pin this in real workflows — 'latest' means the action's
+      behavior can change under you between runs.
+    required: false
+    default: 'latest'
+  baseline-report:
+    description: >-
+      Path to a sidecheck JSON report from a previous run (e.g. the base
+      branch) to compare against. If given, the action fails only on a
+      new regression (see fail-on-regression); if omitted, it falls back
+      to fail-on-leak against this run's result alone. Fetching/storing
+      this across runs is on you — see the example workflow for one way
+      to do it with actions/cache.
+    required: false
+    default: ''
+  fail-on-leak:
+    description: >-
+      When no baseline-report is given: fail the step if this run finds a
+      significant leak.
+    required: false
+    default: 'true'
+  fail-on-regression:
+    description: >-
+      When baseline-report is given: fail the step if compare reports a
+      new regression (ignored, with a warning, if fail-on-leak is what
+      you actually meant — see the README for the difference).
+    required: false
+    default: 'true'
+  comment-on-pr:
+    description: 'Post (or update) a PR comment with the result. No-op outside a pull_request event.'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'Token used to post the PR comment. Defaults to the workflow''s own GITHUB_TOKEN.'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  significant:
+    description: '"true" if this run detected a statistically significant timing difference.'
+    value: ${{ steps.run-check.outputs.significant }}
+  estimated-leak-us:
+    description: 'Estimated leak in microseconds (0 if not significant).'
+    value: ${{ steps.run-check.outputs.estimated-leak-us }}
+  regression:
+    description: '"true" if compare flagged a new regression against baseline-report. Empty if no baseline was given.'
+    value: ${{ steps.run-compare.outputs.regression }}
+  report-path:
+    description: >-
+      Path to the JSON report this run produced — upload it as an
+      artifact, or cache it, to use as next run's baseline-report.
+    value: ${{ steps.run-check.outputs.report-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate injection point inputs
+      shell: bash
+      run: |
+        count=0
+        [ -n "${{ inputs.header }}" ] && count=$((count+1))
+        [ -n "${{ inputs.query }}" ] && count=$((count+1))
+        [ -n "${{ inputs.json-field }}" ] && count=$((count+1))
+        if [ "$count" -ne 1 ]; then
+          echo "::error::exactly one of header/query/json-field must be set (got $count)"
+          exit 1
+        fi
+        if [ -n "${{ inputs.json-body }}" ] && [ -z "${{ inputs.json-field }}" ]; then
+          echo "::error::json-body requires json-field"
+          exit 1
+        fi
+
+    - name: Install sidecheck ${{ inputs.version }}
+      shell: bash
+      run: |
+        case "$RUNNER_OS" in
+          Linux)   asset="sidecheck-linux-x86_64" ;;
+          macOS)   asset="sidecheck-macos-$(uname -m | sed 's/arm64/aarch64/')" ;;
+          Windows) asset="sidecheck-windows-x86_64.exe" ;;
+          *) echo "::error::unsupported runner OS: $RUNNER_OS"; exit 1 ;;
+        esac
+
+        if [ "${{ inputs.version }}" = "latest" ]; then
+          url="https://github.com/casablanque-code/sidecheck/releases/latest/download/$asset"
+        else
+          url="https://github.com/casablanque-code/sidecheck/releases/download/${{ inputs.version }}/$asset"
+        fi
+
+        echo "downloading $url"
+        bin_path="$RUNNER_TEMP/sidecheck"
+        [ "$RUNNER_OS" = "Windows" ] && bin_path="$bin_path.exe"
+        curl -sL -o "$bin_path" "$url"
+        chmod +x "$bin_path"
+        "$bin_path" --version
+        echo "SIDECHECK_BIN=$bin_path" >> "$GITHUB_ENV"
+
+    - name: Build argument list
+      id: build-args
+      shell: bash
+      run: |
+        args=()
+        [ -n "${{ inputs.header }}" ] && args+=(--header "${{ inputs.header }}")
+        [ -n "${{ inputs.query }}" ] && args+=(--query "${{ inputs.query }}")
+        [ -n "${{ inputs.json-field }}" ] && args+=(--json-field "${{ inputs.json-field }}")
+        [ -n "${{ inputs.json-body }}" ] && args+=(--json-body "${{ inputs.json-body }}")
+        [ -n "${{ inputs.samples }}" ] && args+=(--samples "${{ inputs.samples }}")
+        [ "${{ inputs.insecure }}" = "true" ] && args+=(--insecure)
+        [ "${{ inputs.force }}" = "true" ] && args+=(--force)
+        args+=(--max-samples "${{ inputs.max-samples }}")
+        args+=(--confidence "${{ inputs.confidence }}")
+
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+          args+=(--extra-header "$line")
+        done <<< "${{ inputs.extra-headers }}"
+
+        # GitHub Actions has no native array output type — encode as
+        # NUL-separated so no argument value can be split or reinterpreted
+        # by word-splitting on the way back out.
+        printf '%s\0' "${args[@]}" > "$RUNNER_TEMP/sidecheck-args.nul"
+
+    - name: Run sidecheck check
+      id: run-check
+      shell: bash
+      run: |
+        mapfile -d '' -t args < "$RUNNER_TEMP/sidecheck-args.nul"
+        report_path="$RUNNER_TEMP/sidecheck-report.json"
+
+        set +e
+        "$SIDECHECK_BIN" check "${{ inputs.target-url }}" \
+          --secret "${{ inputs.secret }}" \
+          --report "$report_path" \
+          "${args[@]}" \
+          > "$RUNNER_TEMP/sidecheck-output.log" 2>&1
+        check_exit=$?
+        set -e
+
+        cat "$RUNNER_TEMP/sidecheck-output.log"
+
+        if [ ! -f "$report_path" ]; then
+          echo "::error::sidecheck check did not produce a report (exit $check_exit) — see the log above, likely a connectivity or argument problem rather than a detection result"
+          exit 1
+        fi
+
+        significant=$(python3 -c "import json; print(str(json.load(open('$report_path'))['significant']).lower())")
+        leak_us=$(python3 -c "import json; print(json.load(open('$report_path')).get('estimated_leak_us', 0))")
+
+        echo "significant=$significant" >> "$GITHUB_OUTPUT"
+        echo "estimated-leak-us=$leak_us" >> "$GITHUB_OUTPUT"
+        echo "report-path=$report_path" >> "$GITHUB_OUTPUT"
+
+    - name: Compare against baseline
+      id: run-compare
+      if: inputs.baseline-report != ''
+      shell: bash
+      run: |
+        report_path="${{ steps.run-check.outputs.report-path }}"
+
+        set +e
+        "$SIDECHECK_BIN" compare "${{ inputs.baseline-report }}" "$report_path" \
+          > "$RUNNER_TEMP/sidecheck-compare.log" 2>&1
+        compare_exit=$?
+        set -e
+
+        cat "$RUNNER_TEMP/sidecheck-compare.log"
+
+        if [ "$compare_exit" -eq 1 ]; then
+          echo "regression=true" >> "$GITHUB_OUTPUT"
+        elif [ "$compare_exit" -eq 0 ]; then
+          echo "regression=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::sidecheck compare failed unexpectedly (exit $compare_exit) — see the log above"
+          exit 1
+        fi
+
+    - name: Comment on PR
+      if: inputs.comment-on-pr == 'true' && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const significant = '${{ steps.run-check.outputs.significant }}' === 'true';
+          const leakUs = '${{ steps.run-check.outputs.estimated-leak-us }}';
+          const hasBaseline = '${{ inputs.baseline-report }}' !== '';
+          const regression = '${{ steps.run-compare.outputs.regression }}' === 'true';
+          const targetUrl = '${{ inputs.target-url }}';
+
+          let verdict;
+          if (hasBaseline) {
+            verdict = regression
+              ? `🔴 **New timing leak introduced** relative to the baseline (estimated ${leakUs} μs).`
+              : (significant
+                  ? `🟡 Timing leak detected, but it isn't new — already present in the baseline.`
+                  : `🟢 No timing leak detected.`);
+          } else {
+            verdict = significant
+              ? `🔴 **Timing leak detected** (estimated ${leakUs} μs).`
+              : `🟢 No timing leak detected.`;
+          }
+
+          const body = [
+            '<!-- sidecheck-report -->',
+            '### sidecheck timing report',
+            '',
+            verdict,
+            '',
+            `- target: \`${targetUrl}\``,
+            hasBaseline ? `- compared against baseline: yes` : '',
+            '',
+            'sidecheck cannot prove the absence of a timing leak — only detect a statistically ' +
+              'significant one under the tested conditions. A clean result here is not a safety guarantee.',
+          ].filter(Boolean).join('\n');
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+          const existing = comments.find(c => c.body.includes('<!-- sidecheck-report -->'));
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }
+
+    - name: Enforce pass/fail
+      shell: bash
+      run: |
+        has_baseline="${{ inputs.baseline-report != '' }}"
+        if [ "$has_baseline" = "true" ]; then
+          if [ "${{ inputs.fail-on-regression }}" = "true" ] && [ "${{ steps.run-compare.outputs.regression }}" = "true" ]; then
+            echo "::error::sidecheck detected a new timing leak relative to the baseline"
+            exit 1
+          fi
+        else
+          if [ "${{ inputs.fail-on-leak }}" = "true" ] && [ "${{ steps.run-check.outputs.significant }}" = "true" ]; then
+            echo "::error::sidecheck detected a timing leak"
+            exit 1
+          fi
+        fi

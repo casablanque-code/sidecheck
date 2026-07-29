@@ -20,45 +20,40 @@
   argument-validation regressions), in addition to fmt/clippy/unit tests
 - `sidecheck compare baseline.json current.json` — flags a new leak
   relative to a baseline report without failing on a pre-existing one
+- A composite GitHub Action (`action/`) wrapping the binary: runs
+  `check` (and `compare` if a baseline is given), posts/updates a PR
+  comment, sets outputs, fails the step per `fail-on-leak`/
+  `fail-on-regression`. Self-tested in CI against a live fixture
+  (positive, negative, regression, and invalid-input cases)
 
-## Next: killer feature — a GitHub Action
+## Next: wiring the Action into a full CI gate
 
-Right now `sidecheck` is a CLI you run by hand. The bigger opportunity is
-turning it into a CI gate, the same way `cargo audit` or a coverage
-threshold check works today:
+The Action itself is done — what's still missing is the piece that
+turns it into the full picture from the original pitch:
 
 ```
 PR opened
   ↓
 deploy preview / ephemeral environment comes up
   ↓
-sidecheck-action runs against the preview URL
+sidecheck-action runs against the preview URL (with baseline-report set)
   ↓
 timing regression introduced?
   ↓
-block merge, comment on the PR with the report
+block merge — PR comment already shows the report
 ```
 
-This is a genuinely new category of CI check — most security scanning is
-static (SAST) or dependency-based (SCA); a timing-regression gate on a
-live preview environment doesn't have an established competitor. Rough
-shape:
-
-- [ ] `sidecheck-action` — a composite GitHub Action wrapping the binary,
-      inputs for target URL / injection point / secret (via GitHub
-      Secrets) / max acceptable run time
-- [ ] Structured PR comment output (reuse `--report` JSON, render as a
-      readable comment via the Action, not just raw CLI text in logs)
-- [ ] Baseline storage and wiring for CI — `sidecheck compare` (shipped)
-      already does the actual regression logic given two report files;
-      what's still missing is fetching/storing the base branch's report
-      between CI runs (repo file vs. Actions cache vs. artifact from the
-      base branch's own run — undecided, see
-      [docs/reproducibility.md](./docs/reproducibility.md#comparing-against-a-baseline))
+- [ ] A documented, tested reference pattern for baseline storage
+      specifically — `action/examples/pr-gate.yml` sketches one approach
+      (`actions/cache` keyed on the base branch), but it's an example,
+      not something exercised in this repo's own CI the way the rest of
+      the Action is
 - [ ] `cargo sidecheck` subcommand as a friendlier local entry point,
       mirroring how `cargo audit`/`cargo clippy` feel native to a Rust
       workflow even though the actual logic doesn't care about Cargo at
       all
+- [ ] Marketplace listing once the Action has real external usage to
+      point to, rather than just this repo's own self-test
 
 ## Also planned
 
