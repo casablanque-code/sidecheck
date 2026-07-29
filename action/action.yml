@@ -14,9 +14,9 @@ inputs:
     required: true
   secret:
     description: >-
-      The real secret value to test with. Pass this from a GitHub Secret
-      (${{ secrets.MY_API_KEY }}), never a literal value in the workflow
-      file.
+      The real secret value to test with. Pass this from a GitHub
+      secret (a step in your workflow like secrets.MY_API_KEY), never a
+      literal value in the workflow file.
     required: true
   header:
     description: 'Inject the value into this HTTP header. Exactly one of header/query/json-field is required.'
