@@ -4,6 +4,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), versions per [S
 
 ## [Unreleased]
 
+### Added
+- `--extra-header` — sends a static header unchanged on every request (repeatable, `NAME=VALUE`), for CSRF tokens/session cookies/other auth layers the endpoint needs before it reaches the value under test. Available on both `check` and `doctor`.
+
 ## [0.2.1] — 2026-07-27
 
 ### Fixed

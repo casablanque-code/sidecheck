@@ -41,22 +41,28 @@ impl InjectionPoint {
     }
 }
 
-/// HTTP target: the URL plus the point where the test value gets injected.
+/// HTTP target: the URL, the point where the test value gets injected,
+/// and any static headers sent unchanged on every request (auth headers,
+/// CSRF tokens, session cookies — whatever the endpoint needs to reach
+/// the code path under test at all, distinct from the value being
+/// injected and measured).
 pub struct HttpTarget {
     client: reqwest::blocking::Client,
     url: String,
     injection: InjectionPoint,
+    extra_headers: Vec<(String, String)>,
 }
 
 impl HttpTarget {
     pub fn new(url: impl Into<String>, injection: InjectionPoint) -> Result<Self> {
-        Self::new_with_options(url, injection, false)
+        Self::new_with_options(url, injection, false, Vec::new())
     }
 
     pub fn new_with_options(
         url: impl Into<String>,
         injection: InjectionPoint,
         accept_invalid_certs: bool,
+        extra_headers: Vec<(String, String)>,
     ) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
@@ -70,6 +76,7 @@ impl HttpTarget {
             client,
             url: url.into(),
             injection,
+            extra_headers,
         })
     }
 
@@ -79,27 +86,26 @@ impl HttpTarget {
     pub fn measure(&self, value: &str) -> Result<f64> {
         let start = Instant::now();
 
-        let resp = match &self.injection {
-            InjectionPoint::Header(name) => self
-                .client
-                .get(&self.url)
-                .header(name.as_str(), value)
-                .send(),
-            InjectionPoint::Query(name) => self
-                .client
-                .get(&self.url)
-                .query(&[(name.as_str(), value)])
-                .send(),
+        let builder = match &self.injection {
+            InjectionPoint::Header(name) => self.client.get(&self.url).header(name.as_str(), value),
+            InjectionPoint::Query(name) => {
+                self.client.get(&self.url).query(&[(name.as_str(), value)])
+            }
             InjectionPoint::JsonBody { field, template } => {
                 let mut body = template.clone().unwrap_or_default();
                 body.insert(field.clone(), serde_json::Value::String(value.to_string()));
                 self.client
                     .post(&self.url)
                     .json(&serde_json::Value::Object(body))
-                    .send()
             }
-        }
-        .context("request failed")?;
+        };
+
+        let builder = self
+            .extra_headers
+            .iter()
+            .fold(builder, |b, (name, value)| b.header(name, value));
+
+        let resp = builder.send().context("request failed")?;
 
         // important to read the body fully — otherwise the measurement
         // doesn't include the full response time

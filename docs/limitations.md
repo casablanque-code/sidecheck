@@ -32,12 +32,13 @@ itself is vulnerable. `sidecheck` will honestly (and misleadingly) report
 wasn't one in what it measured. It has no way to know the comparison you
 care about was never reached.
 
-This is exactly why `--json-body` (see the main README) exists — to let
-you supply whatever other fields a realistic endpoint needs to get past
-an early exit and into the comparison you're actually auditing. When
-setting up a target, check response codes/bodies for both classes
-manually first (e.g. with `curl`) to confirm they're both reaching the
-comparison you intend to test, not just failing the same early gate.
+This is exactly why `--json-body` and `--extra-header` (see the main
+README) exist — to let you supply whatever other fields or headers a
+realistic endpoint needs to get past an early exit and into the
+comparison you're actually auditing. When setting up a target, check
+response codes/bodies for both classes manually first (e.g. with `curl`)
+to confirm they're both reaching the comparison you intend to test, not
+just failing the same early gate.
 
 ## Real-world detectability at short secret lengths
 

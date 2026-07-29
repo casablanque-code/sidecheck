@@ -34,6 +34,10 @@ sidecheck check https://myapp.local/login \
   --samples 5000
 ```
 
+Combine with `--extra-header` for endpoints that need a CSRF token or
+session cookie before this comparison is even reached — see the main
+README for the basic case.
+
 ## When sidecheck refuses to run
 
 If the pilot batch estimates the network is too noisy relative to the

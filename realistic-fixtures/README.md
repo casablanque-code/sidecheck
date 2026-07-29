@@ -75,6 +75,25 @@ sidecheck check http://127.0.0.1:8003/vulnerable \
   --secret correct-secret-key-123456
 ```
 
+## csrf_header_fixture.py
+
+Pure Python, no dependencies. Exercises `--extra-header`: a realistic
+endpoint gated by a CSRF token header on top of the value under test —
+the header equivalent of what `json_login_fixture.py` covers for JSON
+bodies. Without the token, every request gets `403` before the API key
+comparison is even reached.
+
+```sh
+python3 csrf_header_fixture.py
+# serves on http://127.0.0.1:8004
+#   /vulnerable — manual character-by-character comparison, amplified delay
+#   /safe       — hmac.compare_digest
+
+sidecheck check http://127.0.0.1:8004/vulnerable \
+  --header X-API-Key --extra-header "X-CSRF-Token=expected-csrf-token" \
+  --secret correct-secret-key-123456
+```
+
 ## Running the default (25-byte) fixtures
 
 Secret for both: `correct-secret-key-123456`

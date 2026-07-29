@@ -97,6 +97,18 @@ sidecheck check https://myapp.local/login \
   --secret "..."
 ```
 
+The same problem shows up with headers and cookies: a CSRF token or
+session cookie the endpoint requires before it even looks at the value
+under test. `--extra-header` sends a static header unchanged on every
+request:
+
+```sh
+sidecheck check https://myapp.local/api \
+  --header X-API-Key --secret "..." \
+  --extra-header "X-CSRF-Token=xyz" \
+  --extra-header "Cookie=session=abc123"
+```
+
 For secrets you don't want in shell history, `--value-a`/`--value-b`
 advanced mode, and CI-friendly `--report`/`--output-csv` output, see
 [docs/usage.md](./docs/usage.md).
@@ -170,7 +182,7 @@ found here," not a certificate of safety.
 
 Two more limits worth knowing before you trust a result: `sidecheck` has
 no way to tell whether your injection point actually reached the code
-path you meant to test (see `--json-body` above and
+path you meant to test (see `--json-body`/`--extra-header` above and
 [docs/limitations.md](./docs/limitations.md)), and a genuine leak on a
 short secret is often not reliably detectable over real HTTP at all — the
 network noise floor can exceed a nanosecond-scale CPU leak entirely. Full
