@@ -18,6 +18,8 @@
 - CI runs live `check`/`doctor` end-to-end against the amplified Python
   fixture (positive/negative cases, `--json-body` injection and its
   argument-validation regressions), in addition to fmt/clippy/unit tests
+- `sidecheck compare baseline.json current.json` — flags a new leak
+  relative to a baseline report without failing on a pre-existing one
 
 ## Next: killer feature — a GitHub Action
 
@@ -47,11 +49,12 @@ shape:
       Secrets) / max acceptable run time
 - [ ] Structured PR comment output (reuse `--report` JSON, render as a
       readable comment via the Action, not just raw CLI text in logs)
-- [ ] A documented pattern for baseline comparison — flag a *regression*
-      (new leak that wasn't there in the base branch), not just any leak,
-      since re-running the full statistical suite on every PR against an
-      absolute threshold is noisier than comparing against a stored
-      baseline
+- [ ] Baseline storage and wiring for CI — `sidecheck compare` (shipped)
+      already does the actual regression logic given two report files;
+      what's still missing is fetching/storing the base branch's report
+      between CI runs (repo file vs. Actions cache vs. artifact from the
+      base branch's own run — undecided, see
+      [docs/reproducibility.md](./docs/reproducibility.md#comparing-against-a-baseline))
 - [ ] `cargo sidecheck` subcommand as a friendlier local entry point,
       mirroring how `cargo audit`/`cargo clippy` feel native to a Rust
       workflow even though the actual logic doesn't care about Cargo at

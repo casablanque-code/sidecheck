@@ -156,3 +156,34 @@ jobs:
           if [ "$code" -eq 0 ]; then echo "expected a non-zero exit for --json-body without --json-field"; exit 1; fi
           grep -q "requires --json-field" /tmp/noflag.err || { echo "unexpected error message:"; cat /tmp/noflag.err; exit 1; }
           echo "OK: --json-body without --json-field rejected, regression for the 0.2.1 clap ArgGroup bug covered"
+
+      - name: sidecheck compare flags a genuine regression
+        run: |
+          ./target/release/sidecheck check http://127.0.0.1:8000/safe \
+            --header X-API-Key --secret correct-secret-key-123456 \
+            --samples 2000 --confidence 0.999 --report /tmp/baseline.json
+          ./target/release/sidecheck check http://127.0.0.1:8000/vulnerable \
+            --header X-API-Key --secret correct-secret-key-123456 \
+            --samples 2000 --report /tmp/current.json
+
+          set +e
+          ./target/release/sidecheck compare /tmp/baseline.json /tmp/current.json
+          code=$?
+          set -e
+          if [ "$code" -ne 1 ]; then
+            echo "expected exit 1 for a clean-baseline vs leaking-current comparison, got $code"
+            exit 1
+          fi
+          echo "OK: compare correctly flags a new leak as a regression (exit 1)"
+
+      - name: sidecheck compare doesn't flag a pre-existing leak as new, and exits 0
+        run: |
+          set +e
+          ./target/release/sidecheck compare /tmp/current.json /tmp/current.json
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "expected exit 0 when baseline and current both already show the same leak, got $code"
+            exit 1
+          fi
+          echo "OK: compare doesn't fail CI on a leak that isn't new"

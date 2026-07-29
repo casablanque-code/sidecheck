@@ -61,6 +61,37 @@ same way as one from a future version with improved statistics.
 elapsed_seconds`) for anyone who wants to independently re-run the
 statistics rather than trust sidecheck's own numbers.
 
+## Comparing against a baseline
+
+A leak being present isn't automatically something a given change should
+be blamed for — it might have already been there. `sidecheck compare`
+checks whether a *new* leak was introduced relative to a baseline report,
+rather than flagging any leak at all:
+
+```sh
+sidecheck compare baseline.json current.json
+```
+
+Exits `1` (and prints why) only when the baseline was clean and the
+current run is significant — a pre-existing leak present in both reports
+is still reported, but doesn't fail the comparison, since re-flagging a
+problem that predates the change under test isn't useful signal for a
+per-change CI gate. An improvement (baseline leaked, current doesn't)
+exits `0` too, with a note to verify it's a real fix rather than a
+noisier run — see [limitations.md](./limitations.md) on what a clean
+result does and doesn't mean.
+
+Comparing reports for different targets or injection points still runs,
+but prints a warning first — useful for spot-checking, less useful as an
+unattended CI gate, so make sure both sides of the comparison are testing
+the same endpoint and field before wiring this into automation.
+
+This is the building block for a CI gate (baseline from the base branch,
+current from the PR) — see [ROADMAP.md](../ROADMAP.md) for where that's
+headed; `compare` itself doesn't yet know how to fetch or store a
+baseline across CI runs, only how to compare two report files you already
+have.
+
 ## Self-verification
 
 `test-fixture/test_fixture.py` is a small reference server with a

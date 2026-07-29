@@ -110,8 +110,10 @@ sidecheck check https://myapp.local/api \
 ```
 
 For secrets you don't want in shell history, `--value-a`/`--value-b`
-advanced mode, and CI-friendly `--report`/`--output-csv` output, see
-[docs/usage.md](./docs/usage.md).
+advanced mode, CI-friendly `--report`/`--output-csv` output, and
+comparing a run against a baseline to catch regressions specifically
+(`sidecheck compare`), see [docs/usage.md](./docs/usage.md) and
+[docs/reproducibility.md](./docs/reproducibility.md#comparing-against-a-baseline).
 
 ## Install
 
