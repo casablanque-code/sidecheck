@@ -168,6 +168,19 @@ enum Commands {
         #[arg(long = "extra-header", value_name = "NAME=VALUE")]
         extra_headers: Vec<String>,
     },
+
+    /// Compare a baseline report against a current one and flag whether a
+    /// new timing leak was introduced — for CI: fail the build only on a
+    /// regression, not on a leak that was already there before this
+    /// change (that's a separate, pre-existing problem to track on its
+    /// own, not something this specific change should be blamed for).
+    Compare {
+        /// JSON report from a previous run (--report), e.g. from the base
+        /// branch
+        baseline: PathBuf,
+        /// JSON report from the current run to compare against it
+        current: PathBuf,
+    },
 }
 
 /// Minimum samples per class — below this, the low percentile is
@@ -693,6 +706,77 @@ fn main() -> Result<()> {
             let doctor_report =
                 DoctorReport::from_measurements(url, &result.latencies, result.failures);
             println!("{}", doctor_report.render());
+
+            Ok(())
+        }
+
+        Commands::Compare { baseline, current } => {
+            let base = export::read_json(&baseline)?;
+            let cur = export::read_json(&current)?;
+
+            if base.target != cur.target || base.injection_point != cur.injection_point {
+                eprintln!(
+                    "warning: comparing reports for different targets/injection points —\n  \
+                     baseline: {} ({})\n  current:  {} ({})\n  \
+                     this comparison may not be meaningful.",
+                    base.target, base.injection_point, cur.target, cur.injection_point
+                );
+            }
+
+            println!("────────────────────────────────────────────────");
+            println!("sidecheck compare");
+            println!("────────────────────────────────────────────────\n");
+            println!("target            {}", cur.target);
+            println!("field             {}", cur.injection_point);
+            println!(
+                "baseline          {} (sidecheck {})",
+                if base.significant {
+                    "leak detected"
+                } else {
+                    "clean"
+                },
+                base.sidecheck_version
+            );
+            println!(
+                "current           {} (sidecheck {})",
+                if cur.significant {
+                    "leak detected"
+                } else {
+                    "clean"
+                },
+                cur.sidecheck_version
+            );
+
+            let is_regression = !base.significant && cur.significant;
+
+            println!("────────────────────────────────────────────────");
+            if is_regression {
+                println!(
+                    "✗ regression: no leak in the baseline, but a significant one now\n  \
+                     estimated leak   {:.1} μs (95% CI [{:.1}, {:.1}] μs)\n\n\
+                     this change appears to have introduced a timing leak that wasn't\n\
+                     there before.",
+                    cur.estimated_leak_us, cur.ci_low_us, cur.ci_high_us
+                );
+                println!("────────────────────────────────────────────────");
+                std::process::exit(1);
+            } else if base.significant && !cur.significant {
+                println!(
+                    "✓ improved: the baseline's leak is no longer significant.\n  \
+                     (still verify this is a real fix, not just a noisier run —\n  \
+                     see docs/limitations.md on what a clean result does and doesn't mean)"
+                );
+            } else if base.significant && cur.significant {
+                println!(
+                    "⚠ leak present in both baseline and current — not flagged as a NEW\n  \
+                     regression by this comparison, but it's still an existing problem.\n  \
+                     baseline leak   {:.1} μs\n  current leak    {:.1} μs",
+                    base.estimated_leak_us, cur.estimated_leak_us
+                );
+            } else {
+                println!("✓ no leak in baseline or current.");
+            }
+            println!("────────────────────────────────────────────────");
 
             Ok(())
         }

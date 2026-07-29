@@ -5,7 +5,7 @@ use crate::report::DetectionReport;
 use crate::sampler::RawSamples;
 use crate::stats::BOOTSTRAP_ITERATIONS;
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -29,7 +29,7 @@ pub fn write_csv(path: &Path, raw: &RawSamples) -> Result<()> {
 /// Always carries the sidecheck version and seed — a year from now the
 /// statistics algorithm may have changed, and without a version an old
 /// report becomes unclear about what to trust.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct JsonReport {
     pub target: String,
     pub injection_point: String,
@@ -77,4 +77,17 @@ pub fn write_json(path: &Path, report: &DetectionReport) -> Result<()> {
         serde_json::to_string_pretty(&json_report).context("failed to serialize report to JSON")?;
     std::fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
+}
+
+/// Reads back a report previously written by `write_json` — used by
+/// `sidecheck compare` to load both sides of a baseline/current
+/// comparison. Deliberately lenient about `sidecheck_version`: an older
+/// report from a previous release should still load, since comparing
+/// across versions (the whole point of a CI baseline) is the normal
+/// case, not an error condition.
+pub fn read_json(path: &Path) -> Result<JsonReport> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&text)
+        .with_context(|| format!("{} is not a valid sidecheck JSON report", path.display()))
 }
