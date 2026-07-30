@@ -202,11 +202,15 @@ jobs:
             sleep 0.5
           done
 
-      # Pinned to an existing published release rather than the sidecheck
-      # binary built from this PR's own changes — the action's job is to
-      # orchestrate that binary, not to re-test sidecheck's own detection
-      # logic (already covered by the e2e job above). If a PR changes
-      # action.yml, this is what actually exercises the change.
+      # Uses 'latest' rather than a pinned tag on purpose: this job tests
+      # whether the action correctly orchestrates whatever sidecheck
+      # binary is actually published right now, not a fixed historical
+      # snapshot — a stale pin here would silently stop testing new CLI
+      # features (like compare, below) the moment they ship without this
+      # workflow file itself being touched. Real external usage should
+      # still pin a specific release (see action/README.md) — that's a
+      # different concern (reproducibility for consumers) from this job's
+      # (does the action work against what's actually out there).
       - name: Run action against the vulnerable endpoint
         id: vulnerable
         uses: ./action
@@ -215,7 +219,7 @@ jobs:
           header: X-API-Key
           secret: correct-secret-key-123456
           samples: '2000'
-          version: 'v0.2.1'
+          version: 'latest'
           fail-on-leak: 'false'
           comment-on-pr: 'false'
 
@@ -240,7 +244,7 @@ jobs:
           secret: correct-secret-key-123456
           samples: '2000'
           confidence: '0.999'
-          version: 'v0.2.1'
+          version: 'latest'
           fail-on-leak: 'true'
           comment-on-pr: 'false'
 
@@ -260,7 +264,7 @@ jobs:
           header: X-API-Key
           secret: correct-secret-key-123456
           samples: '2000'
-          version: 'v0.2.1'
+          version: 'latest'
           baseline-report: ${{ steps.safe.outputs.report-path }}
           fail-on-regression: 'false'
           comment-on-pr: 'false'
