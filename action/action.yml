@@ -192,7 +192,13 @@ runs:
       shell: bash
       run: |
         mapfile -d '' -t args < "$RUNNER_TEMP/sidecheck-args.nul"
-        report_path="$RUNNER_TEMP/sidecheck-report.json"
+        # a fixed filename here would collide across multiple `uses:
+        # ./action` invocations in the same job (RUNNER_TEMP is shared
+        # job-wide, not per-step) — report-path is an output meant to be
+        # read later, possibly as a *different* invocation's
+        # baseline-report input, so it has to survive past this step
+        # without being overwritten by the next invocation.
+        report_path=$(mktemp "$RUNNER_TEMP/sidecheck-report-XXXXXX.json")
 
         set +e
         "$SIDECHECK_BIN" check "${{ inputs.target-url }}" \
@@ -205,7 +211,7 @@ runs:
 
         cat "$RUNNER_TEMP/sidecheck-output.log"
 
-        if [ ! -f "$report_path" ]; then
+        if [ ! -s "$report_path" ]; then
           echo "::error::sidecheck check did not produce a report (exit $check_exit) — see the log above, likely a connectivity or argument problem rather than a detection result"
           exit 1
         fi
