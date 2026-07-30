@@ -2,12 +2,13 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/), versions per [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] — 2026-07-30
 
 ### Added
 - `--extra-header` — sends a static header unchanged on every request (repeatable, `NAME=VALUE`), for CSRF tokens/session cookies/other auth layers the endpoint needs before it reaches the value under test. Available on both `check` and `doctor`.
 - `sidecheck compare baseline.json current.json` — flags a *new* leak relative to a baseline report (exits 1 only when the baseline was clean and the current run isn't), rather than failing on any leak including pre-existing ones. Building block for a CI regression gate.
 - A composite GitHub Action (`action/`) wrapping the binary — runs `check` (and `compare` against a baseline if given), posts/updates a PR comment, exposes `significant`/`estimated-leak-us`/`regression`/`report-path` as outputs. See `action/README.md`.
+- Colorized terminal output for `check`/`doctor`/`compare`/the `--repeat` stability summary — headers, ✓/⚠/✗ verdict marks, and highlighted numbers, via the `console` crate. Automatically drops to plain text when NO_COLOR is set or output isn't a terminal (piped/CI), so machine-parsed output and log files are unaffected. Warnings and fatal errors now go through consistent `warning:`/`error:` (+ `hint:`) formatting instead of ad-hoc `eprintln!`s.
 
 ### Fixed
 - Two negative-case assertions in the e2e CI job (`check` should stay quiet on a genuinely safe endpoint) had an inherent ~5% false-positive rate from running sidecheck's own 95%-confidence bootstrap test as a hard CI assertion — raised to `--confidence 0.999` for those specific checks. A separate assertion that was really testing a deterministic protocol fact (a missing username short-circuits before the password comparison) was replaced with a direct `curl` check instead of relying on statistical inference for something that isn't actually random.
