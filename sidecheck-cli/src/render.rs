@@ -1,0 +1,335 @@
+//! Colored terminal renderings of the report types from `sidecheck-core`.
+//!
+//! These mirror `DetectionReport::render()` / `DoctorReport::render()`
+//! content-for-content, just with color and layout applied. Kept in the
+//! CLI crate rather than core: core is a library other things (the GitHub
+//! Action, someone's own tooling) may consume without wanting ANSI codes
+//! baked into the string they get back. Core's own `render()` stays as
+//! the plain-text fallback (e.g. useful if output isn't a tty and a
+//! caller wants guaranteed-plain text without relying on `console`'s
+//! auto-detection).
+
+use crate::style;
+use sidecheck_core::doctor::DoctorReport;
+use sidecheck_core::export::JsonReport;
+use sidecheck_core::report::DetectionReport;
+
+const WIDTH: usize = 48;
+
+/// Auto-picks ns/μs/ms/s so we don't print "16264.9 μs" where "16.3 ms"
+/// reads easier. Kept here (rather than importing a private fn from
+/// core) since it's a display concern, not a statistics one.
+pub fn format_duration(seconds: f64) -> String {
+    let abs = seconds.abs();
+    if abs >= 1.0 {
+        format!("{seconds:.3} s")
+    } else if abs >= 0.001 {
+        format!("{:.2} ms", seconds * 1_000.0)
+    } else if abs >= 0.000_001 {
+        format!("{:.1} μs", seconds * 1_000_000.0)
+    } else {
+        format!("{:.0} ns", seconds * 1_000_000_000.0)
+    }
+}
+
+pub fn detection(report: &DetectionReport) -> String {
+    let jitter = format_duration(report.jitter_seconds);
+    let significant = report.result.is_significant();
+    let mut out = String::new();
+
+    out.push_str(&style::rule(WIDTH));
+    out.push('\n');
+    out.push_str(&style::title("sidecheck timing report"));
+    out.push('\n');
+    out.push_str(&style::rule(WIDTH));
+    out.push_str("\n\n");
+
+    out.push_str(&format!(
+        "{}{}\n",
+        style::field("target", 17),
+        style::value().apply_to(&report.target)
+    ));
+    out.push_str(&format!(
+        "{}{}\n",
+        style::field("field", 17),
+        style::value().apply_to(&report.field)
+    ));
+    out.push_str(&format!(
+        "{}{}\n",
+        style::field("samples/class", 17),
+        report.samples_per_class
+    ));
+    out.push_str(&format!(
+        "{}{}\n",
+        style::field("network jitter", 17),
+        jitter
+    ));
+    if report.failures > 0 {
+        out.push_str(&format!(
+            "{}{} (excluded from analysis)\n",
+            style::field("failed requests", 17),
+            style::warn_style().apply_to(report.failures)
+        ));
+    }
+    out.push('\n');
+
+    if significant {
+        out.push_str(&format!("{} timing leak detected\n", style::warn_mark()));
+        out.push_str(&format!(
+            "  {}{}\n",
+            style::field("estimated leak", 21),
+            style::bold().apply_to(format_duration(report.result.estimated_leak.abs()))
+        ));
+        // "confidence" alone reads as "probability the server is
+        // vulnerable" — spell out that it's the bootstrap CI of the
+        // measured difference, not a probability of vulnerability or a
+        // p-value.
+        out.push_str(&format!(
+            "  {}{:.1}% (of the measured difference being non-zero)\n",
+            style::field("bootstrap confidence", 21),
+            report.result.confidence * 100.0
+        ));
+        out.push_str(&format!(
+            "\n  {}\n",
+            style::dim().apply_to(
+                "this endpoint responds measurably differently depending on\n  input correctness. an attacker can exploit this to recover\n  secrets character-by-character instead of brute-forcing them."
+            )
+        ));
+        out.push_str(&format!(
+            "\n  fix: use a constant-time comparison instead of == on secret\n  bytes (e.g. the {} crate in Rust, {} in Go, {} in Python).\n",
+            style::value().apply_to("subtle"),
+            style::value().apply_to("crypto/subtle"),
+            style::value().apply_to("hmac.compare_digest"),
+        ));
+    } else {
+        out.push_str(&format!(
+            "{} no statistically significant timing difference detected\n",
+            style::ok_mark()
+        ));
+        out.push_str(&format!(
+            "  {}\n",
+            style::dim().apply_to(format!(
+                "(bootstrap {:.0}% CI of the difference: [{}, {}], includes zero)",
+                report.result.confidence * 100.0,
+                format_duration(report.result.ci_low),
+                format_duration(report.result.ci_high)
+            ))
+        ));
+    }
+
+    out.push_str(&style::rule(WIDTH));
+    out.push('\n');
+    out.push_str(&style::dim().apply_to(
+        "sidecheck cannot prove the absence of a timing leak — only detect a\nstatistically significant one under the tested conditions. A clean\nresult here is not a safety guarantee."
+    ).to_string());
+    out.push('\n');
+    out.push_str(&style::dim().apply_to(format!(
+        "generated by sidecheck {} · seed {} (rerun with --seed {} to reproduce request order)",
+        report.sidecheck_version, report.seed, report.seed
+    )).to_string());
+    out.push('\n');
+
+    out
+}
+
+pub fn doctor(report: &DoctorReport) -> String {
+    // DoctorReport's quality/jitter classification is private to core,
+    // so re-derive the same thresholds here rather than exposing an
+    // internal enum as public API just for CLI coloring. Kept in sync
+    // with `doctor::classify_jitter`/`DoctorReport::quality` by the
+    // doctest below.
+    let jitter_level = if report.jitter_seconds < 0.001 {
+        "low"
+    } else if report.jitter_seconds < 0.010 {
+        "medium"
+    } else {
+        "high"
+    };
+    enum Quality {
+        Good,
+        Fair,
+        Poor,
+    }
+    let quality = if report.packet_loss_ratio > 0.05 {
+        Quality::Poor
+    } else {
+        match jitter_level {
+            "low" => Quality::Good,
+            "medium" if report.packet_loss_ratio > 0.0 => Quality::Fair,
+            "medium" => Quality::Good,
+            _ => Quality::Poor,
+        }
+    };
+
+    let mut out = String::new();
+    out.push_str(&style::rule(WIDTH));
+    out.push('\n');
+    out.push_str(&style::title("sidecheck doctor"));
+    out.push('\n');
+    out.push_str(&style::rule(WIDTH));
+    out.push_str("\n\n");
+
+    out.push_str(&format!(
+        "{}{}\n",
+        style::field("target", 23),
+        style::value().apply_to(&report.target)
+    ));
+    out.push_str(&format!(
+        "{}{}\n\n",
+        style::field("samples", 23),
+        report.samples
+    ));
+    out.push_str(&format!(
+        "{}{:.1} ms\n",
+        style::field("median RTT", 23),
+        report.median_rtt_seconds * 1000.0
+    ));
+    out.push_str(&format!(
+        "{}{:.2} ms ({jitter_level})\n",
+        style::field("RTT jitter", 23),
+        report.jitter_seconds * 1000.0,
+    ));
+    out.push_str(&format!(
+        "{}{:.1}%\n",
+        style::field("packet loss", 23),
+        report.packet_loss_ratio * 100.0
+    ));
+    if report.recommended_samples > 50_000_000 {
+        out.push_str(&format!(
+            "{}{}\n",
+            style::field("recommended samples", 23),
+            style::warn_style().apply_to(
+                "effectively unbounded — a ~1μs leak is not\n                       reliably measurable over this path"
+            )
+        ));
+    } else {
+        out.push_str(&format!(
+            "{}~{} (to reliably detect a ~1μs leak, the\n                       rough scale of a real == vs constant-time bug)\n",
+            style::field("recommended samples", 23),
+            report.recommended_samples
+        ));
+    }
+    let quality_label = match quality {
+        Quality::Good => style::ok_style().apply_to("GOOD").to_string(),
+        Quality::Fair => style::warn_style().apply_to("FAIR").to_string(),
+        Quality::Poor => style::err_style().apply_to("POOR").to_string(),
+    };
+    out.push_str(&format!(
+        "{}{quality_label}\n",
+        style::field("environment quality", 23)
+    ));
+
+    out.push_str(&style::rule(WIDTH));
+    out.push('\n');
+    match quality {
+        Quality::Good => out.push_str(&format!(
+            "{} this path looks suitable for timing measurement. proceed with `sidecheck check`.\n",
+            style::ok_mark()
+        )),
+        Quality::Fair => out.push_str(
+            "usable, but expect to need a larger sample size for small leaks. \
+             `sidecheck check` will size the run automatically based on what it finds.\n",
+        ),
+        Quality::Poor => out.push_str(&format!(
+            "{} this path is too noisy/lossy for reliable timing measurement of a \
+             realistic-sized leak. this is a property of the network path, not proof \
+             the endpoint is safe. test from a lower-latency vantage point (same \
+             LAN/datacenter as the target, or from the server itself) if you can.\n",
+            style::warn_mark()
+        )),
+    }
+
+    out
+}
+
+pub fn compare(base: &JsonReport, cur: &JsonReport) -> String {
+    let mut out = String::new();
+    out.push_str(&style::rule(WIDTH));
+    out.push('\n');
+    out.push_str(&style::title("sidecheck compare"));
+    out.push_str("\n\n");
+
+    out.push_str(&format!(
+        "{}{}\n",
+        style::field("target", 18),
+        style::value().apply_to(&cur.target)
+    ));
+    out.push_str(&format!(
+        "{}{}\n",
+        style::field("field", 18),
+        style::value().apply_to(&cur.injection_point)
+    ));
+    out.push_str(&format!(
+        "{}{} (sidecheck {})\n",
+        style::field("baseline", 18),
+        if base.significant {
+            "leak detected"
+        } else {
+            "clean"
+        },
+        base.sidecheck_version
+    ));
+    out.push_str(&format!(
+        "{}{} (sidecheck {})\n",
+        style::field("current", 18),
+        if cur.significant {
+            "leak detected"
+        } else {
+            "clean"
+        },
+        cur.sidecheck_version
+    ));
+
+    let is_regression = !base.significant && cur.significant;
+
+    out.push_str(&style::rule(WIDTH));
+    out.push('\n');
+    if is_regression {
+        out.push_str(&format!(
+            "{} regression: no leak in the baseline, but a significant one now\n  {}{:.1} μs (95% CI [{:.1}, {:.1}] μs)\n\n{}\n",
+            style::err_mark(),
+            style::field("estimated leak", 16),
+            cur.estimated_leak_us,
+            cur.ci_low_us,
+            cur.ci_high_us,
+            style::dim().apply_to(
+                "this change appears to have introduced a timing leak that wasn't\nthere before."
+            )
+        ));
+        out.push_str(&style::rule(WIDTH));
+        out.push('\n');
+    } else if base.significant && !cur.significant {
+        out.push_str(&format!(
+            "{} improved: the baseline's leak is no longer significant.\n  {}\n",
+            style::ok_mark(),
+            style::dim().apply_to(
+                "(still verify this is a real fix, not just a noisier run —\n  see docs/limitations.md on what a clean result does and doesn't mean)"
+            )
+        ));
+    } else if base.significant && cur.significant {
+        out.push_str(&format!(
+            "{} leak present in both baseline and current — not flagged as a NEW\n  regression by this comparison, but it's still an existing problem.\n  {}{:.1} μs\n  {}{:.1} μs\n",
+            style::warn_mark(),
+            style::field("baseline leak", 16),
+            base.estimated_leak_us,
+            style::field("current leak", 16),
+            cur.estimated_leak_us
+        ));
+    } else {
+        out.push_str(&format!(
+            "{} no leak in baseline or current.\n",
+            style::ok_mark()
+        ));
+    }
+    out.push_str(&style::rule(WIDTH));
+    out.push('\n');
+
+    out
+}
+
+/// `true` if `compare()`'s output represents a hard regression — the CLI
+/// uses this to decide the process exit code without re-deriving the
+/// condition itself.
+pub fn compare_is_regression(base: &JsonReport, cur: &JsonReport) -> bool {
+    !base.significant && cur.significant
+}
