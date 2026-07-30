@@ -12,6 +12,9 @@ use sidecheck_core::{
 use std::io::BufRead;
 use std::path::PathBuf;
 
+mod render;
+mod style;
+
 #[derive(Parser)]
 #[command(
     name = "sidecheck",
@@ -223,9 +226,9 @@ fn read_secret(
     secret_stdin: bool,
 ) -> Result<Option<String>> {
     if let Some(s) = secret {
-        eprintln!(
-            "warning: secret passed via --secret is visible in `ps aux` and shell history. \
-             Prefer --secret-env or --secret-stdin for anything sensitive."
+        style::warning(
+            "secret passed via --secret is visible in `ps aux` and shell history. \
+             Prefer --secret-env or --secret-stdin for anything sensitive.",
         );
         return Ok(Some(s));
     }
@@ -309,8 +312,8 @@ fn run_one_check(
                 let capped = max_samples.max(MIN_SAMPLES);
                 let estimated_wall_seconds = mean_request_time * (capped * 2) as f64;
 
-                eprintln!(
-                    "warning: network jitter ({:.2} ms) is large relative to the \
+                style::warning(&format!(
+                    "network jitter ({:.2} ms) is large relative to the \
                      estimated effect ({:.1} μs) — signal-to-noise ratio is roughly \
                      1:{:.0}. {} samples would be needed for a clean signal; \
                      --max-samples={} would still fall far short and the result would \
@@ -320,7 +323,7 @@ fn run_one_check(
                     jitter / pilot_leak,
                     needed,
                     max_samples
-                );
+                ));
                 eprintln!(
                     "  running the capped {capped} samples/class would take roughly \
                      {} at this network's measured latency, for a result that likely \
@@ -329,17 +332,17 @@ fn run_one_check(
                 );
 
                 if !force {
-                    eprintln!(
-                        "\nstopping before wasting that time. this usually means the \
-                         leak (if real) is too small to catch over this network path. \
-                         Options:\n  \
-                         - test from a lower-latency vantage point (same LAN/datacenter \
-                         as the target, or from the server itself against 127.0.0.1)\n  \
-                         - if you understand the result will likely be inconclusive and \
-                         want to run it anyway, pass --force\n  \
-                         - or raise --max-samples if you're willing to wait much longer"
+                    style::fatal(
+                        "stopping before wasting that time — the leak (if real) is too \
+                         small to catch over this network path.",
+                        Some(
+                            "test from a lower-latency vantage point (same LAN/datacenter \
+                             as the target, or the server itself against 127.0.0.1); pass \
+                             --force to run anyway knowing the result will likely be \
+                             inconclusive; or raise --max-samples if you're willing to wait \
+                             much longer.",
+                        ),
                     );
-                    std::process::exit(1);
                 }
 
                 eprintln!("  --force given, proceeding anyway.");
@@ -441,17 +444,21 @@ fn print_stability_summary(outcomes: &[(RunResult, DetectionReport)]) {
     let variance = leaks.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / leaks.len() as f64;
     let std_dev = variance.sqrt();
 
-    println!("\n{}", "─".repeat(48));
-    println!("stability summary across {} runs", outcomes.len());
-    println!("{}", "─".repeat(48));
+    println!("\n{}", style::rule(48));
+    println!(
+        "{}",
+        style::title(&format!("stability summary across {} runs", outcomes.len()))
+    );
+    println!("{}", style::rule(48));
     println!();
     println!("significant in {significant_count}/{} runs", outcomes.len());
     println!(
-        "estimated leak   mean {} · range [{}, {}] · std dev {}",
-        format_duration_public(mean),
-        format_duration_public(min),
-        format_duration_public(max),
-        format_duration_public(std_dev)
+        "{}mean {} · range [{}, {}] · std dev {}",
+        style::field("estimated leak", 17),
+        render::format_duration(mean),
+        render::format_duration(min),
+        render::format_duration(max),
+        render::format_duration(std_dev)
     );
 
     // Significance is a more reliable stability signal than the relative
@@ -464,44 +471,33 @@ fn print_stability_summary(outcomes: &[(RunResult, DetectionReport)]) {
     // the magnitude itself is.
     if significant_count == 0 {
         println!(
-            "\n✓ consistently no significant difference across {} runs.",
+            "\n{} consistently no significant difference across {} runs.",
+            style::ok_mark(),
             outcomes.len()
         );
     } else if significant_count == outcomes.len() {
         if std_dev > mean.abs() * 0.5 {
             println!(
-                "\n⚠ all runs found a significant effect, but its magnitude varies \
+                "\n{} all runs found a significant effect, but its magnitude varies \
                  substantially between runs (std dev is more than half the mean) — the \
                  direction is consistent, but don't treat any single run's exact number \
-                 as precise."
+                 as precise.",
+                style::warn_mark()
             );
         } else {
-            println!("\n✓ consistently significant with a stable magnitude across runs.");
+            println!(
+                "\n{} consistently significant with a stable magnitude across runs.",
+                style::ok_mark()
+            );
         }
     } else {
         println!(
-            "\n⚠ significance is inconsistent across runs ({significant_count}/{} found a \
+            "\n{} significance is inconsistent across runs ({significant_count}/{} found a \
              signal) — likely sitting right at the edge of detectability with this sample \
              size; more samples per run would give a more decisive answer.",
+            style::warn_mark(),
             outcomes.len()
         );
-    }
-}
-
-// report.rs's format_duration is private to that module (it's an internal
-// formatting detail of DetectionReport::render); this is a small standalone
-// copy for the stability summary rather than making it a public API surface
-// sidecheck-core has to keep stable just for one CLI-side convenience print.
-fn format_duration_public(seconds: f64) -> String {
-    let abs = seconds.abs();
-    if abs >= 1.0 {
-        format!("{seconds:.3} s")
-    } else if abs >= 0.001 {
-        format!("{:.2} ms", seconds * 1_000.0)
-    } else if abs >= 0.000_001 {
-        format!("{:.1} μs", seconds * 1_000_000.0)
-    } else {
-        format!("{:.0} ns", seconds * 1_000_000_000.0)
     }
 }
 
@@ -595,15 +591,20 @@ fn main() -> Result<()> {
             };
 
             if val_a.len() != val_b.len() {
-                eprintln!(
-                    "warning: the two tested values have different lengths ({} vs {} bytes). \
+                style::warning(&format!(
+                    "the two tested values have different lengths ({} vs {} bytes). \
                      This alone can cause a timing difference unrelated to any comparison leak, \
                      and will confound the result.",
                     val_a.len(),
                     val_b.len()
-                );
+                ));
             }
-            eprintln!("sidecheck: only test systems you own or have explicit permission to test.");
+            eprintln!(
+                "{}",
+                style::bold().apply_to(
+                    "sidecheck: only test systems you own or have explicit permission to test."
+                )
+            );
             eprintln!("seed: {seed} (pass --seed {seed} to reproduce this exact request order)\n");
             let injection_desc = injection.describe();
             eprintln!("injection point: {}\n", injection_desc);
@@ -654,7 +655,7 @@ fn main() -> Result<()> {
                     seed,
                     sidecheck_version: env!("CARGO_PKG_VERSION").to_string(),
                 };
-                println!("{}", detection_report.render());
+                println!("{}", render::detection(&detection_report));
 
                 if let Some(path) = &report {
                     let path = suffix_path(path, repeat, i);
@@ -699,13 +700,18 @@ fn main() -> Result<()> {
             pb.finish_and_clear();
 
             if result.latencies.is_empty() {
-                eprintln!("error: all {samples} requests failed — can't reach {url} at all.");
-                std::process::exit(1);
+                style::fatal(
+                    &format!("all {samples} requests failed — can't reach {url} at all."),
+                    Some(
+                        "check the URL is reachable (curl it directly), and that --insecure \
+                         isn't needed for a self-signed cert.",
+                    ),
+                );
             }
 
             let doctor_report =
                 DoctorReport::from_measurements(url, &result.latencies, result.failures);
-            println!("{}", doctor_report.render());
+            println!("{}", render::doctor(&doctor_report));
 
             Ok(())
         }
@@ -715,68 +721,19 @@ fn main() -> Result<()> {
             let cur = export::read_json(&current)?;
 
             if base.target != cur.target || base.injection_point != cur.injection_point {
-                eprintln!(
-                    "warning: comparing reports for different targets/injection points —\n  \
+                style::warning(&format!(
+                    "comparing reports for different targets/injection points —\n  \
                      baseline: {} ({})\n  current:  {} ({})\n  \
                      this comparison may not be meaningful.",
                     base.target, base.injection_point, cur.target, cur.injection_point
-                );
+                ));
             }
 
-            println!("────────────────────────────────────────────────");
-            println!("sidecheck compare");
-            println!("────────────────────────────────────────────────\n");
-            println!("target            {}", cur.target);
-            println!("field             {}", cur.injection_point);
-            println!(
-                "baseline          {} (sidecheck {})",
-                if base.significant {
-                    "leak detected"
-                } else {
-                    "clean"
-                },
-                base.sidecheck_version
-            );
-            println!(
-                "current           {} (sidecheck {})",
-                if cur.significant {
-                    "leak detected"
-                } else {
-                    "clean"
-                },
-                cur.sidecheck_version
-            );
+            println!("{}", render::compare(&base, &cur));
 
-            let is_regression = !base.significant && cur.significant;
-
-            println!("────────────────────────────────────────────────");
-            if is_regression {
-                println!(
-                    "✗ regression: no leak in the baseline, but a significant one now\n  \
-                     estimated leak   {:.1} μs (95% CI [{:.1}, {:.1}] μs)\n\n\
-                     this change appears to have introduced a timing leak that wasn't\n\
-                     there before.",
-                    cur.estimated_leak_us, cur.ci_low_us, cur.ci_high_us
-                );
-                println!("────────────────────────────────────────────────");
+            if render::compare_is_regression(&base, &cur) {
                 std::process::exit(1);
-            } else if base.significant && !cur.significant {
-                println!(
-                    "✓ improved: the baseline's leak is no longer significant.\n  \
-                     (still verify this is a real fix, not just a noisier run —\n  \
-                     see docs/limitations.md on what a clean result does and doesn't mean)"
-                );
-            } else if base.significant && cur.significant {
-                println!(
-                    "⚠ leak present in both baseline and current — not flagged as a NEW\n  \
-                     regression by this comparison, but it's still an existing problem.\n  \
-                     baseline leak   {:.1} μs\n  current leak    {:.1} μs",
-                    base.estimated_leak_us, cur.estimated_leak_us
-                );
-            } else {
-                println!("✓ no leak in baseline or current.");
             }
-            println!("────────────────────────────────────────────────");
 
             Ok(())
         }
