@@ -12,6 +12,9 @@ description = "Remote timing side-channel auditor for your own HTTP services"
 keywords = ["security", "timing-attack", "side-channel", "audit"]
 categories = ["command-line-utilities", "cryptography"]
 
+[workspace.dependencies]
+sidecheck-core = { path = "sidecheck-core", version = "0.3.0" }
+
 [profile.release]
 lto = true
 codegen-units = 1

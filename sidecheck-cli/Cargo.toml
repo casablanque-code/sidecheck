@@ -15,7 +15,7 @@ name = "sidecheck"
 path = "src/main.rs"
 
 [dependencies]
-sidecheck-core = { path = "../sidecheck-core", version = "0.2.0" }
+sidecheck-core = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 indicatif = "0.17"

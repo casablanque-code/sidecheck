@@ -3,10 +3,17 @@ name: Prepare Release
 # The one step with a human in the loop: Actions → Prepare Release →
 # Run workflow → enter the version. Everything after that is automatic:
 #   1. version in the root Cargo.toml's [workspace.package] gets bumped —
-#      the single place in the whole workspace; sidecheck-core and
-#      sidecheck (CLI) read it via version.workspace = true, so both
-#      crates always move version-for-version together.
-#   2. commit "chore(release): vX.Y.Z"
+#      sidecheck-core and sidecheck (CLI) read it via version.workspace =
+#      true, so both crates' own version always moves together.
+#   1b. the sidecheck-core version *pin* in [workspace.dependencies] (what
+#       sidecheck-cli actually depends on) gets bumped in the same step —
+#       this is a separate number from 1. above and doesn't move on its
+#       own; letting it drift from the real version is exactly what broke
+#       the v0.3.0 release (cargo/clippy/e2e all failed with "failed to
+#       select a version for sidecheck-core"). `cargo check --workspace
+#       --locked` right after the bump catches this before anything gets
+#       tagged or pushed.
+#   2. commit "chore(release): vX.Y.Z" (Cargo.toml + the refreshed Cargo.lock)
 #   3. tag vX.Y.Z, push the commit and the tag
 #   4. the tag push triggers .github/workflows/release.yml — which
 #      publishes both crates to crates.io (idempotently) and builds a
@@ -54,17 +61,31 @@ jobs:
             exit 1;
           fi
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Bump workspace version
         run: |
           v="${{ github.event.inputs.version }}"
           sed -i 's/^version = ".*"$/version = "'"$v"'"/' Cargo.toml
+          sed -i -E 's/(sidecheck-core = \{ path = "sidecheck-core", version = ")[^"]+(" \})/\1'"$v"'\2/' Cargo.toml
           grep '^version = ' Cargo.toml
+          grep 'sidecheck-core = { path' Cargo.toml
+
+      - name: Verify the bump actually builds before tagging
+        run: |
+          v="${{ github.event.inputs.version }}"
+          grep -q "sidecheck-core = { path = \"sidecheck-core\", version = \"$v\" }" Cargo.toml || {
+            echo "sidecheck-core version pin in [workspace.dependencies] doesn't match v$v — aborting before tagging a release that won't build.";
+            exit 1;
+          }
+          cargo update -p sidecheck-core
+          cargo check --workspace --locked
 
       - name: Commit and tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml
+          git add Cargo.toml Cargo.lock
           git commit -m "chore(release): v${{ github.event.inputs.version }}"
           git tag -a "v${{ github.event.inputs.version }}" -m "sidecheck v${{ github.event.inputs.version }}"
           git push origin HEAD:main
