@@ -72,10 +72,20 @@ func safeHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	http.HandleFunc("/vulnerable", vulnerableHandler)
 	http.HandleFunc("/safe", safeHandler)
-	fmt.Println("realistic Go fixture on http://127.0.0.1:8001")
+	// 0.0.0.0, not 127.0.0.1: this fixture is also meant to be run from a
+	// real remote vantage point (a VPS, testing over an actual network
+	// path instead of loopback) — binding to 127.0.0.1 only accepts
+	// connections addressed to that literal loopback address, so a client
+	// hitting the box's public IP just hangs until the client's own
+	// request timeout, with no hint from this side about why. This is a
+	// deliberately timing-vulnerable endpoint, though — see README.md's
+	// note on restricting inbound access with ufw/security groups rather
+	// than leaving it open to the whole internet while it's up.
+	addr := "0.0.0.0:8001"
+	fmt.Printf("realistic Go fixture on http://%s (reachable on any interface, not just loopback)\n", addr)
 	fmt.Println("  /vulnerable — real == comparison, no artificial delay")
 	fmt.Println("  /safe       — subtle.ConstantTimeCompare")
 	fmt.Printf("  secret length: %d bytes (set SECRET_LEN to change)\n", len(secret))
 	fmt.Printf("  secret: %q\n", secret)
-	log.Fatal(http.ListenAndServe("127.0.0.1:8001", nil))
+	log.Fatal(http.ListenAndServe(addr, nil))
 }

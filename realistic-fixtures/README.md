@@ -10,6 +10,31 @@ nanoseconds to low microseconds, not milliseconds.
 This is the honest test of whether `sidecheck` is useful in practice, not
 just correct in principle.
 
+## Testing from a real vantage point (not loopback)
+
+These fixtures bind to `0.0.0.0`, not `127.0.0.1` — on purpose: loopback
+measurements only tell you sidecheck's pipeline works, not whether a leak
+is detectable over an actual network path (real jitter, real packet loss).
+Run one on a VPS you control, then run `sidecheck doctor`/`check` against
+it from a *different* machine — the whole point is to force requests
+through a real network path, so running the client on the same box as the
+fixture (even against its public IP) defeats the purpose and can behave
+oddly depending on the provider's hairpin NAT support.
+
+This does mean the endpoint is reachable from the whole internet while
+it's running — it's a deliberately timing-vulnerable test endpoint with a
+throwaway secret, so the risk is low, but two things are worth doing
+anyway: don't leave it running longer than the test session, and restrict
+inbound access to just your own IP rather than the world, e.g.:
+
+```sh
+ufw allow from <your-IP> to any port 8001 proto tcp
+```
+
+(scan/bot traffic hitting the port while you measure would also just add
+noise to the timing data, so this helps the measurement too, not only
+security.)
+
 ## go-nethttp
 
 Go standard library only, no external dependencies (`go.mod` isn't even

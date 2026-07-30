@@ -57,8 +57,8 @@ const server = http.createServer((req, res) => {
   res.end(ok ? 'ok' : 'denied');
 });
 
-server.listen(8002, '127.0.0.1', () => {
-  console.log('realistic Node fixture on http://127.0.0.1:8002');
+server.listen(8002, '0.0.0.0', () => {
+  console.log('realistic Node fixture on http://0.0.0.0:8002 (reachable on any interface, not just loopback)');
   console.log('  /vulnerable — real === comparison, no artificial delay');
   console.log('  /safe       — crypto.timingSafeEqual');
   console.log(`  secret length: ${SECRET.length} bytes (set SECRET_LEN to change)`);

@@ -64,8 +64,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = ThreadingHTTPServer(("127.0.0.1", 8004), Handler)
-    print("csrf header fixture running on http://127.0.0.1:8004")
+    server = ThreadingHTTPServer(("0.0.0.0", 8004), Handler)
+    print("csrf header fixture running on http://0.0.0.0:8004 (reachable on any interface, not just loopback)")
     print("  /vulnerable — should be flagged by sidecheck (with --extra-header)")
     print("  /safe       — should NOT be flagged")
     print(f"  csrf token: {CSRF_TOKEN!r}, api key: {SECRET!r}")
