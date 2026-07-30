@@ -601,8 +601,9 @@ fn main() -> Result<()> {
             }
             eprintln!(
                 "{}",
-                style::bold()
-                    .apply_to("sidecheck: only test systems you own or have explicit permission to test.")
+                style::bold().apply_to(
+                    "sidecheck: only test systems you own or have explicit permission to test."
+                )
             );
             eprintln!("seed: {seed} (pass --seed {seed} to reproduce this exact request order)\n");
             let injection_desc = injection.describe();
