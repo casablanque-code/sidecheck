@@ -84,7 +84,11 @@ pub fn detection(report: &DetectionReport) -> String {
         report.samples_per_class
     )));
     out.push('\n');
-    out.push_str(&p(&format!("{}{}", style::field("network jitter", 17), jitter)));
+    out.push_str(&p(&format!(
+        "{}{}",
+        style::field("network jitter", 17),
+        jitter
+    )));
     out.push('\n');
     if report.failures > 0 {
         out.push_str(&p(&format!(
@@ -153,7 +157,9 @@ pub fn detection(report: &DetectionReport) -> String {
             style::ok_style().apply_to("NO LEAK")
         )));
         out.push('\n');
-        out.push_str(&p("no statistically significant timing difference detected"));
+        out.push_str(&p(
+            "no statistically significant timing difference detected",
+        ));
         out.push('\n');
         out.push_str(&style::panel::blank());
         out.push('\n');
@@ -243,7 +249,10 @@ pub fn doctor(report: &DoctorReport) -> String {
     // or get clipped by one that's longer.
     let col1 = 20;
     let rows: Vec<(String, String)> = vec![
-        ("target".into(), style::value().apply_to(&report.target).to_string()),
+        (
+            "target".into(),
+            style::value().apply_to(&report.target).to_string(),
+        ),
         ("samples".into(), report.samples.to_string()),
         (
             "median RTT".into(),
